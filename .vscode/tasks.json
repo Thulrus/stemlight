@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Setup: install dependencies",
+      "detail": "Clean install from package-lock.json (run once after cloning)",
+      "type": "shell",
+      "command": "npm ci",
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev server",
+      "detail": "Vite dev server with hot reload at http://localhost:5173",
+      "type": "shell",
+      "command": "npm run dev -- --open",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": {
+          "activesBegin": ".",
+          "beginsPattern": "VITE v",
+          "endsPattern": "Local:"
+        }
+      },
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "Test",
+      "detail": "Unit tests (+ benchmark if a song is in fixtures/private)",
+      "type": "shell",
+      "command": "npm test",
+      "problemMatcher": [],
+      "group": { "kind": "test", "isDefault": true }
+    },
+    {
+      "label": "Benchmark vs xLights",
+      "detail": "Score Beats/Bars/Sections against the xLights fixture (needs the song in fixtures/private)",
+      "type": "shell",
+      "command": "npx vitest run tests/eval.test.ts --disableConsoleIntercept",
+      "problemMatcher": []
+    },
+    {
+      "label": "Typecheck",
+      "type": "shell",
+      "command": "npm run typecheck",
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Build",
+      "detail": "Typecheck and build the static site into dist/",
+      "type": "shell",
+      "command": "npm run build",
+      "problemMatcher": ["$tsc"],
+      "group": "build"
+    },
+    {
+      "label": "Preview production build",
+      "detail": "Build, then serve dist/ at http://localhost:4173 as GitHub Pages would",
+      "type": "shell",
+      "command": "npm run build && npm run preview -- --open",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": { "activesBegin": ".", "beginsPattern": "vite v|VITE v", "endsPattern": "Local:" }
+      }
+    }
+  ]
+}
