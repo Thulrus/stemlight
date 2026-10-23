@@ -1,0 +1,6 @@
+node_modules/
+dist/
+fixtures/private/
+example_data/
+*.log
+.DS_Store

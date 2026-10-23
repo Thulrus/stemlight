@@ -1,0 +1,26 @@
+{
+  "name": "stemlight",
+  "version": "0.1.0",
+  "description": "Stemlight: auto-timing tracks for xLights",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "repository": { "type": "git", "url": "https://github.com/Thulrus/stemlight.git" },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "eval": "vitest run tests/eval.test.ts"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

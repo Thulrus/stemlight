@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xrgb>
+  <models type="rgb_effects">
+    <model name="Circle-1" DisplayAs="Circle" Antialias="1" centerPercent="50" Controller="" CustomColor="#9e00ff" Dir="L" InsideOut="0" LayerSizes="1" LayoutGroup="Default" NodesPerString="1" NumStrings="1" PixelSize="30" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="212.660004" ScaleY="210.700012" ScaleZ="1.000000" SourceVersion="2026.17" StartChannel="1" StartSide="B" StringType="Single Color Custom" Transparency="0" versionNumber="8" WorldPosX="-787.293152" WorldPosY="172.301636" WorldPosZ="0.000000">
+    </model>
+    <model name="Circle-2" DisplayAs="Circle" Antialias="1" centerPercent="50" Controller="" CustomColor="#ff8200" Dir="L" InsideOut="0" LayerSizes="1" LayoutGroup="Default" NodesPerString="1" NumStrings="1" PixelSize="30" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="202.850204" ScaleY="203.962494" ScaleZ="1.000000" SourceVersion="2026.17" StartChannel="2" StartSide="B" StringType="Single Color Custom" Transparency="0" versionNumber="8" WorldPosX="-580.464539" WorldPosY="602.916931" WorldPosZ="0.000000">
+    </model>
+    <model name="Circle-3" DisplayAs="Circle" Antialias="1" centerPercent="50" Controller="" CustomColor="#ad00ff" Dir="L" InsideOut="0" LayerSizes="1" LayoutGroup="Default" NodesPerString="1" NumStrings="1" PixelSize="30" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="212.660004" ScaleY="225.037399" ScaleZ="1.000000" SourceVersion="2026.17" StartChannel="3" StartSide="B" StringType="Single Color Custom" Transparency="0" versionNumber="8" WorldPosX="1813.574585" WorldPosY="650.511353" WorldPosZ="0.000000">
+    </model>
+    <model name="Circle-4" DisplayAs="Circle" Antialias="1" centerPercent="50" Controller="" CustomColor="#ff9a00" Dir="L" InsideOut="0" LayerSizes="1" LayoutGroup="Default" NodesPerString="1" NumStrings="1" PixelSize="30" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="227.276703" ScaleY="233.240005" ScaleZ="1.000000" SourceVersion="2026.17" StartChannel="4" StartSide="B" StringType="Single Color Custom" Transparency="0" versionNumber="8" WorldPosX="1996.828125" WorldPosY="290.106842" WorldPosZ="0.000000">
+    </model>
+    <model name="Circle-5" DisplayAs="Circle" Antialias="1" centerPercent="50" Controller="" CustomColor="#ff00f1" Dir="L" InsideOut="0" LayerSizes="1" LayoutGroup="Default" NodesPerString="1" NumStrings="1" PixelSize="30" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="202.173996" ScaleY="201.860397" ScaleZ="1.000000" SourceVersion="2026.17" StartChannel="5" StartSide="B" StringType="Single Color Custom" Transparency="0" versionNumber="8" WorldPosX="1783.815308" WorldPosY="-151.554092" WorldPosZ="0.000000">
+    </model>
+    <model name="Pumpkin Prime" DisplayAs="Circle" Antialias="1" centerPercent="0" Controller="WLED-2" Dir="L" InsideOut="0" LayerSizes="15" LayoutGroup="Default" ModelChain="&gt;Pumpkin2" NodesPerString="15" NumStrings="1" PixelSize="20" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="24.556955" ScaleY="49.006706" ScaleZ="0.071429" SourceVersion="2026.17" StartChannel="!WLED-2:43" StartSide="B" StringType="RGB Nodes" Transparency="0" versionNumber="8" WorldPosX="497.679474" WorldPosY="-76.061531" WorldPosZ="0.000000">
+      <ControllerConnection Port="1" Protocol="ws2811"/>
+    </model>
+    <model name="Pumpkin1" DisplayAs="Circle" Antialias="1" centerPercent="0" Controller="WLED-2" Dir="L" InsideOut="0" LayerSizes="7" LayoutGroup="Default" NodesPerString="7" NumStrings="1" PixelSize="15" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="31.843155" ScaleY="35.178791" ScaleZ="0.166667" SourceVersion="2026.17" StartChannel="!WLED-2:1" StartSide="B" StringType="RGB Nodes" Transparency="0" versionNumber="8" WorldPosX="61.489021" WorldPosY="276.728516" WorldPosZ="0.000000">
+      <ControllerConnection Port="1" Protocol="ws2811"/>
+    </model>
+    <model name="Pumpkin2" DisplayAs="Circle" Antialias="1" centerPercent="0" Controller="WLED-2" Dir="L" InsideOut="0" LayerSizes="7" LayoutGroup="Default" ModelChain="&gt;Pumpkin1" NodesPerString="7" NumStrings="1" PixelSize="15" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="31.843155" ScaleY="35.178791" ScaleZ="0.166667" SourceVersion="2026.17" StartChannel="!WLED-2:22" StartSide="B" StringType="RGB Nodes" Transparency="0" versionNumber="8" WorldPosX="-54.498753" WorldPosY="-212.866318" WorldPosZ="0.000000">
+      <ControllerConnection Port="1" Protocol="ws2811"/>
+    </model>
+    <model name="Pumpkin3" DisplayAs="Circle" Antialias="1" centerPercent="0" Controller="WLED-2" Dir="L" InsideOut="0" LayerSizes="7" LayoutGroup="Default" ModelChain="&gt;Pumpkin Prime" NodesPerString="7" NumStrings="1" PixelSize="15" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="31.843155" ScaleY="35.178791" ScaleZ="0.166667" SourceVersion="2026.17" StartChannel="!WLED-2:88" StartSide="B" StringType="RGB Nodes" Transparency="0" versionNumber="8" WorldPosX="975.300720" WorldPosY="219.444016" WorldPosZ="0.000000">
+      <ControllerConnection Port="1" Protocol="ws2811"/>
+    </model>
+    <model name="Pumpkin4" DisplayAs="Circle" Antialias="1" centerPercent="0" Controller="WLED-2" Dir="L" InsideOut="0" LayerSizes="7" LayoutGroup="Default" ModelChain="&gt;Pumpkin3" NodesPerString="7" NumStrings="1" PixelSize="15" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="31.843155" ScaleY="35.178791" ScaleZ="0.166667" SourceVersion="2026.17" StartChannel="!WLED-2:109" StartSide="B" StringType="RGB Nodes" Transparency="0" versionNumber="8" WorldPosX="1449.505737" WorldPosY="220.343506" WorldPosZ="0.000000">
+      <ControllerConnection Port="1" Protocol="ws2811"/>
+    </model>
+    <model name="Pumpkin5" DisplayAs="Circle" Antialias="1" centerPercent="0" Controller="WLED-2" Dir="L" InsideOut="0" LayerSizes="7" LayoutGroup="Default" ModelChain="&gt;Pumpkin4" NodesPerString="7" NumStrings="1" PixelSize="15" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" ScaleX="31.843155" ScaleY="35.178791" ScaleZ="0.166667" SourceVersion="2026.17" StartChannel="!WLED-2:130" StartSide="B" StringType="RGB Nodes" Transparency="0" versionNumber="8" WorldPosX="1202.571899" WorldPosY="-193.205658" WorldPosZ="0.000000">
+      <ControllerConnection Port="1" Protocol="ws2811"/>
+    </model>
+    <model name="RGB-Strip" DisplayAs="Poly Line" AlternateNodes="false" Antialias="1" Controller="WLED-1" Corner1="" Corner2="" Corner3="Neither" Corner4="Neither" cPointData="" Dir="L" DropPattern="1" LayoutGroup="Default" LightsPerNode="1" ModelHeight="1.000000" NodesPerString="100" NumPoints="4" PixelSize="5" PointData="-320.639801,23.937229,0.000000,22.284668,409.730591,0.000000,1959.202271,401.498932,0.000000,2476.785156,15.796570,0.000000" PolyStrings="1" ScaleX="1.000000" ScaleY="1.000000" ScaleZ="1.000000" SegsExpanded="TRUE" SourceVersion="2026.17" StartChannel="!WLED-1:1" StartSide="B" StringType="RGB Nodes" Transparency="0" versionNumber="8" WorldPosX="-382.774200" WorldPosY="1115.610718" WorldPosZ="0.000000">
+      <ControllerConnection Port="1" Protocol="ws2811"/>
+    </model>
+    <model name="Single Line" DisplayAs="Single Line" Antialias="1" Controller="" CustomColor="#e220c7" Dir="L" LayoutGroup="Default" LightsPerNode="1" NodesPerString="20" NumStrings="1" PixelSize="10" SourceVersion="2026.17" StartChannel="6" StartSide="B" StringType="Single Color Custom" SuperStringColour0="#ff0000" Transparency="0" versionNumber="8" WorldPosX="-81.769714" WorldPosY="1273.362061" WorldPosZ="0.000000" X2="1392.785767" Y2="-6.136963" Z2="0.000000">
+    </model>
+    <model name="Single Line-2" DisplayAs="Single Line" Antialias="1" Controller="" CustomColor="#ff7000" Dir="L" LayoutGroup="Default" LightsPerNode="1" NodesPerString="20" NumStrings="1" PixelSize="10" SourceVersion="2026.17" StartChannel="7" StartSide="B" StringType="Single Color Custom" Transparency="0" versionNumber="8" WorldPosX="-315.916595" WorldPosY="1064.981567" WorldPosZ="0.000000" X2="1537.046875" Y2="-8.988525" Z2="0.000000">
+    </model>
+    <model name="Single Line-3" DisplayAs="Single Line" Antialias="1" Controller="" Dir="L" LayoutGroup="Default" LightsPerNode="1" NodesPerString="20" NumStrings="1" PixelSize="10" SourceVersion="2026.17" StartChannel="8" StartSide="B" StringType="Single Color White" Transparency="0" versionNumber="8" WorldPosX="111.040825" WorldPosY="907.681580" WorldPosZ="0.000000" X2="1676.369995" Y2="13.482849" Z2="0.000000">
+    </model>
+  </models>
+  <modelGroups type="rgb_effects">
+    <modelGroup name="All-RGB" DisplayAs="ModelGroup" DefaultCamera="2D" GridSize="400" layout="minimalGrid" LayoutGroup="Default" models="Pumpkin1,Pumpkin2,Pumpkin3,Pumpkin4,Pumpkin5,RGB-Strip,Pumpkin Prime">
+    </modelGroup>
+    <modelGroup name="Everything" DisplayAs="ModelGroup" DefaultCamera="2D" GridSize="399" layout="minimalGrid" LayoutGroup="Default" models="Circle-1,Circle-2,Circle-3,Circle-4,Circle-5,Pumpkin Prime,Pumpkin1,Pumpkin2,Pumpkin3,Pumpkin4,Pumpkin5,RGB-Strip,Single Line,Single Line-2,Single Line-3">
+    </modelGroup>
+    <modelGroup name="Relay-Box" DisplayAs="ModelGroup" DefaultCamera="2D" GridSize="400" layout="minimalGrid" LayoutGroup="Default" models="Circle-1,Circle-2,Circle-3,Circle-4,Circle-5,Single Line,Single Line-2,Single Line-3">
+    </modelGroup>
+  </modelGroups>
+  <view_objects>
+    <view_object name="Controller: 192.168.1.18" DisplayAs="Controller" LayoutGroup="Default" WorldPosX="640.000000" WorldPosY="360.000000" WorldPosZ="0.000000" ScaleX="1.000000" ScaleY="1.000000" ScaleZ="1.000000" RotateX="0.000000" RotateY="0.000000" RotateZ="0.000000" Controller="192.168.1.18" Visibility="Off" ShowLabel="0"/>
+    <view_object name="Gridlines" DisplayAs="Gridlines" LayoutGroup="Default" WorldPosX="0.000000" WorldPosY="0.000000" WorldPosZ="0.000000" ScaleX="1.000000" ScaleY="1.000000" ScaleZ="1.000000" RotateX="-90.000000" RotateY="-0.000000" RotateZ="0.000000" GridLineSpacing="50" GridWidth="2000" GridHeight="1000" GridColor="#008000" GridAxis="0" PointToFront="0"/>
+  </view_objects>
+  <layoutGroups>
+  </layoutGroups>
+  <perspectives current="Default Perspective">
+    <perspective name="Default Perspective" settings="layout2|name=ModelPreview;caption=Model Preview;state=6293500;dir=4;layer=1;row=0;pos=0;prop=100000;bestw=250;besth=250;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=HousePreview;caption=House Preview;state=6293500;dir=4;layer=1;row=0;pos=1;prop=100000;bestw=250;besth=250;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=EffectAssist;caption=Effect Assist;state=2099196;dir=4;layer=1;row=0;pos=2;prop=100000;bestw=250;besth=250;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=DisplayElements;caption=Display Elements;state=6293503;dir=4;layer=0;row=0;pos=0;prop=100000;bestw=600;besth=400;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=600;floath=400|name=Perspectives;caption=Perspectives;state=2099198;dir=4;layer=1;row=0;pos=0;prop=100000;bestw=170;besth=132;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=Effect;caption=Effect Settings;state=2099196;dir=4;layer=0;row=1;pos=0;prop=100000;bestw=394;besth=799;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=SelectEffect;caption=Select Effects;state=2099198;dir=4;layer=1;row=0;pos=0;prop=100000;bestw=363;besth=238;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=EffectDropper;caption=Effects;state=2099198;dir=1;layer=0;row=0;pos=0;prop=100000;bestw=999;besth=666;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=ValueCurveDropper;caption=Value Curves;state=2099198;dir=1;layer=0;row=0;pos=0;prop=100000;bestw=40;besth=40;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=ColourDropper;caption=Colours;state=2099198;dir=1;layer=0;row=0;pos=0;prop=100000;bestw=20;besth=20;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=Jukebox;caption=Jukebox;state=2099198;dir=1;layer=0;row=0;pos=0;prop=100000;bestw=100;besth=200;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=Color;caption=Color;state=2099196;dir=1;layer=0;row=0;pos=0;prop=100000;bestw=321;besth=363;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=LayerTiming;caption=Layer Blending;state=2099196;dir=1;layer=0;row=0;pos=1;prop=100000;bestw=265;besth=314;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=LayerSettings;caption=Layer Settings;state=2099196;dir=1;layer=0;row=0;pos=2;prop=100000;bestw=255;besth=407;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|name=SequenceVideo;caption=Sequence Video;state=2099199;dir=4;layer=0;row=0;pos=0;prop=100000;bestw=240;besth=135;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=0;floaty=0;floatw=248;floath=159|name=Main Sequencer;caption=Main Sequencer;state=768;dir=5;layer=0;row=0;pos=0;prop=100000;bestw=125;besth=51;minw=-1;minh=-1;maxw=-1;maxh=-1;floatx=-1;floaty=-1;floatw=-1;floath=-1|dock_size(4,1,0)=252|dock_size(4,0,1)=352|dock_size(1,0,0)=141|dock_size(5,0,0)=127|" version="2.0"/>
+  </perspectives>
+  <settings>
+    <ShowGUID value="0beb579b-88ee-4959-8a56-bee1804d02c6"/>
+    <defaultSeqView value=""/>
+    <previewHeight value="720"/>
+    <previewWidth value="1280"/>
+    <scaleImage value="0"/>
+    <storedLayoutGroup value="Default"/>
+    <xlightsVersion value="2026.17"/>
+  </settings>
+  <modelSets>
+  </modelSets>
+  <views>
+  </views>
+  <colors>
+    <DisabledEffect Red="200" Green="200" Blue="0"/>
+    <EffectDefault Red="192" Green="192" Blue="192"/>
+    <EffectSelected Red="204" Green="102" Blue="255"/>
+    <EffectSelectedDisabled Red="200" Green="200" Blue="64"/>
+    <EffectSelectedFixed Red="255" Green="128" Blue="0"/>
+    <EffectSelectedLocked Red="200" Green="0" Blue="0"/>
+    <GridDashes Red="255" Green="255" Blue="0"/>
+    <Gridlines Red="40" Green="40" Blue="40"/>
+    <LabelOutline Red="103" Green="103" Blue="103"/>
+    <Labels Red="255" Green="255" Blue="204"/>
+    <LayoutDashes Red="255" Green="255" Blue="0"/>
+    <LockedEffect Red="200" Green="0" Blue="0"/>
+    <ModelDefault Red="211" Green="211" Blue="211"/>
+    <ModelNotOnController Red="255" Green="128" Blue="0"/>
+    <ModelOverlap Red="255" Green="0" Blue="0"/>
+    <ModelSelected Red="255" Green="255" Blue="0"/>
+    <Phonemes Red="255" Green="181" Blue="218"/>
+    <Phrases Red="153" Green="255" Blue="153"/>
+    <ReferenceEffect Red="255" Green="0" Blue="255"/>
+    <ReferenceEffectDisabled Red="255" Green="255" Blue="127"/>
+    <ReferenceEffectLocked Red="255" Green="0" Blue="0"/>
+    <RowHeaderSelected Red="130" Green="178" Blue="207"/>
+    <TextHighlighted Red="0" Green="0" Blue="0"/>
+    <TextUnselected Red="0" Green="0" Blue="0"/>
+    <Timing1 Red="0" Green="255" Blue="255"/>
+    <Timing2 Red="255" Green="0" Blue="0"/>
+    <Timing3 Red="0" Green="255" Blue="0"/>
+    <Timing4 Red="0" Green="0" Blue="255"/>
+    <Timing5 Red="255" Green="255" Blue="0"/>
+    <TimingDefault Red="255" Green="255" Blue="255"/>
+    <Waveform Red="130" Green="178" Blue="207"/>
+    <WaveformMouseMarker Red="0" Green="0" Blue="255"/>
+    <WaveformSelected Red="0" Green="0" Blue="200"/>
+    <WaveformSelectedEffect Red="255" Green="128" Blue="0"/>
+    <Words Red="255" Green="218" Blue="145"/>
+  </colors>
+  <Viewpoints>
+  </Viewpoints>
+</xrgb>
