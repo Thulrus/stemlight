@@ -26,8 +26,10 @@ async function loadFile(f: ModelFile, onBytes: (n: number) => void): Promise<Uin
     onBytes(f.bytes);
     return new Uint8Array(cached);
   }
-  const res = await fetch(f.url, { mode: 'cors' });
-  if (!res.ok || !res.body) throw new Error(`Model download failed (${res.status}) for ${f.name}`);
+  const res = await fetch(f.url, { mode: 'cors' }).catch((err) => {
+    throw new Error(`couldn’t download ${f.name} (${err instanceof Error ? err.message : String(err)}); check the internet connection and try again`);
+  });
+  if (!res.ok || !res.body) throw new Error(`couldn’t download ${f.name} (HTTP ${res.status})`);
   const out = new Uint8Array(f.bytes);
   let at = 0;
   const reader = res.body.getReader();
@@ -129,7 +131,16 @@ if (!isOrtThread) self.onmessage = (e: MessageEvent<ToSeparator>) => {
     try {
       if (job !== currentJob) throw new Error('cancelled');
       const cancelled = () => job !== currentJob;
-      if (msg.type === 'separate') {
+      if (msg.type === 'prefetch') {
+        // Download, verify and store only; the same choice of files as getSession.
+        const files = msg.model === 'htdemucs' ? HTDEMUCS_FILES
+          : msg.model === 'aligner' ? [ALIGNER_FILES[(await hasRealGpu()) && (await gpuHasF16()) ? 'fp16' : 'fp32']]
+            : [msg.model === 'lead' ? LEAD_FILE : ROFORMER_FILE];
+        await loadFiles(msg.model, files);
+        const stored = await Promise.all(files.map((f) => idbGet<ArrayBuffer>(MODEL_CACHE_KEY(f)).then(Boolean)));
+        if (!stored.every(Boolean)) throw new Error('the browser didn’t allow storing it (private windows often don’t), so it will download again when a song needs it');
+        post({ type: 'prefetched', model: msg.model });
+      } else if (msg.type === 'separate') {
         let stems;
         try {
           stems = await separate(await getSession('htdemucs', !!msg.cpuOnly), ort.Tensor, msg.left, msg.right, (done, total) => post({ type: 'segment', model: 'htdemucs', done, total }), cancelled);

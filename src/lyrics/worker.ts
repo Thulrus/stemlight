@@ -91,6 +91,13 @@ if (!self.name?.startsWith('em-pthread')) self.onmessage = (e: MessageEvent<ToLy
   if (msg.type === 'cancel') return;
   queue = queue.then(async () => {
     try {
+      if (msg.type === 'prefetch') {
+        // Loading the pipeline downloads (and caches) the files this device will use.
+        await (await getAsr()).dispose();
+        asr = undefined;
+        post({ type: 'prefetched' });
+        return;
+      }
       const words = await transcribe(msg.audio16k, !!msg.cpuOnly, () => job !== currentJob);
       post({ type: 'done', words });
     } catch (err) {

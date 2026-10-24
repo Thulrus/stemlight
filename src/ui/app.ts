@@ -9,7 +9,7 @@ import { ANALYSIS_SR } from '../dsp/features';
 import { fileSafeName, toXTiming } from '../export/xtiming';
 import { SAMPLE_RATE as SEPARATOR_SR, STEM_NAMES, type StemName } from '../separation/htdemucs';
 import type { FromSeparator, ToSeparator } from '../separation/protocol';
-import { hashBytes, idbGet, idbPut } from '../storage/idb';
+import { hashBytes, idbDelete, idbGet, idbKeys, idbPut } from '../storage/idb';
 import type { AsrWord } from '../analysis/lyrics';
 import { WHISPER_BYTES, type FromLyrics, type ToLyrics } from '../lyrics/protocol';
 import { tracksToZip } from '../export/zip';
@@ -21,6 +21,7 @@ import { wordsFromAsr } from '../analysis/lyricTracks';
 import { W2V_SR } from '../align/acoustic';
 import { LightPreview } from './lights';
 import { formatTime, LANE_H, RULER_H, Timeline, WAVE_H } from './timeline';
+import { cachedModels, detectGpu, Downloader, formatMB, modelBytes, MODELS, removeModels, type Gpu, type ModelId, type OptionKey } from './models';
 
 const toInt16 = (x: Float32Array) => Int16Array.from(x, (v) => Math.round(Math.max(-1, Math.min(1, v)) * 32767));
 const fromInt16 = (x: Int16Array) => Float32Array.from(x, (v) => v / 32767);
@@ -33,9 +34,13 @@ function eta(since: number, done: number, total: number) {
   const left = Math.ceil((((performance.now() - since) / done) * (total - done)) / 1000);
   return ` · about ${left >= 90 ? `${Math.round(left / 60)} min` : `${left} s`} left`;
 }
+/** Saved per-song results (stems, vocals, lyrics, vocal timing); models are stored as "model:…". */
+const songCacheKeys = async () => (await idbKeys()).filter((k) => !k.startsWith('model:'));
 const defaultParams = (): AllParams => structuredClone({ ...DEFAULT_PARAMS, ...DEFAULT_STEM_PARAMS });
 const STEM_LABEL: Record<StemName, string> = { drums: 'Drums', bass: 'Bass', vocals: 'Vocals', other: 'Other' };
 /** Bump a kind's version when its output changes, so stale cached results aren't reused. */
+/** Step detail for a result loaded from an earlier run of the same song. */
+const REUSED = 'reused from an earlier run';
 const CACHE_VERSION = { stems: 1, 'vocals-hq': 1, lead: 1, lyrics: 2, emissions: 2 } as const;
 
 /** Which parameter group feeds each generated track. */
@@ -104,6 +109,10 @@ const PARAM_RANGES: Record<keyof AllParams, Record<string, Range>> = {
   },
 };
 
+/** A stage of processing a song, shown in the status panel. */
+type StepId = 'mix' | 'stems' | 'notes' | 'hq' | 'lead' | 'lyrics' | 'align' | 'tracks';
+type Step = { id: StepId; label: string; state: 'pending' | 'active' | 'done' | 'skipped' | 'failed'; detail?: string; note?: string; fraction?: number };
+
 type TrackState = { track: Track; include: boolean; nudgeMs: number; hue: number; userName?: string };
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -137,10 +146,23 @@ export class App {
   private separator?: Worker;
   private lyricsWorker?: Worker;
   private separating = false;
-  /** Stems were sent for analysis and their tracks haven't arrived yet. */
-  private stemsPending = false;
-  /** Fallback notes from the last pipeline run (e.g. "ran on the CPU"), kept on screen. */
-  private pipelineNotes = '';
+  /** Messages sent to the analysis worker whose results haven't come back yet. */
+  private pendingAnalysis = 0;
+  /** The current song's processing steps, for the status panel. */
+  private steps: Step[] = [];
+  private statusOpen = false;
+  private statusDismissed = false;
+  private readonly downloader = new Downloader();
+  /** The files of the current song, for re-running it. */
+  private lastFiles: File[] = [];
+  /** The lyrics came from the user (pasted or edited), not from Whisper. */
+  private lyricsFromUser = false;
+  /** Songs with results saved in this browser (by file hash). */
+  private savedSongs = 0;
+  /** WebGPU support, once detected (until then everything counts as available). */
+  private gpu?: Gpu;
+  private cached = new Set<ModelId>();
+  private options = Object.fromEntries(MODELS.map((m) => [m.option, m.defaultOn])) as Record<OptionKey, boolean>;
   private fileHash = '';
   private loadId = 0;
   private wantStems = true;
@@ -176,28 +198,28 @@ export class App {
     $<HTMLSelectElement>('#grid-start').addEventListener('change', (e) => this.setGrid(Number((e.target as HTMLSelectElement).value) as GridMs));
     $('#export-xtiming').addEventListener('click', () => this.exportCombined());
     $('#export-zip').addEventListener('click', () => this.exportZip());
-    $('#new-file').addEventListener('click', () => { this.cancelSeparation(); this.show('drop'); });
+    $('#new-file').addEventListener('click', () => {
+      if (this.separating && !confirm('This song is still being processed. Stop and start a new song?')) return;
+      this.cancelSeparation();
+      this.endSteps('Cancelled');
+      this.show('drop');
+    });
     $('#stem-cancel').addEventListener('click', () => this.cancelSeparation());
+    $('#rerun').addEventListener('click', () => void this.rerunFresh());
+    $('#status-rerun').addEventListener('click', () => void this.rerunFresh());
     $('#edit-lyrics').addEventListener('click', () => this.openLyricsDialog());
     $<HTMLDialogElement>('#lyrics-dialog').addEventListener('close', () => {
       const dlg = $<HTMLDialogElement>('#lyrics-dialog');
       if (dlg.returnValue === 'align') void this.realign($<HTMLTextAreaElement>('#lyrics-edit').value);
     });
-    // Remember the processing options per browser.
-    const options: [string, string, boolean][] = [['#opt-separate', 'separate', true], ['#opt-hq-vocals', 'hqVocals', false], ['#opt-lead', 'lead', false], ['#opt-align', 'align', true], ['#opt-lyrics', 'lyrics', false]];
-    const syncSubOptions = () => {
-      const on = $<HTMLInputElement>('#opt-separate').checked;
-      for (const sel of ['#opt-hq-vocals', '#opt-lead', '#opt-align', '#opt-lyrics']) $<HTMLInputElement>(sel).disabled = !on;
-    };
-    for (const [sel, key, def] of options) {
-      const box = $<HTMLInputElement>(sel);
-      try { const v = localStorage.getItem(`stemlight.${key}`); box.checked = v === null ? def : v === '1'; } catch { /* storage blocked */ }
-      box.addEventListener('change', () => {
-        try { localStorage.setItem(`stemlight.${key}`, box.checked ? '1' : '0'); } catch { /* ignore */ }
-        syncSubOptions();
-      });
-    }
-    syncSubOptions();
+    $('#status-toggle').addEventListener('click', () => { this.statusOpen = !this.statusOpen; this.renderStatus(); });
+    $('#status-dismiss').addEventListener('click', () => { this.statusDismissed = true; this.renderStatus(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.renderStatus(); });
+    window.addEventListener('beforeunload', (e) => {
+      // Leaving mid-way loses the work (and a half-finished download).
+      if (this.separating || this.downloader.busy) e.preventDefault();
+    });
+    this.bindModels();
     this.tick();
   }
 
@@ -207,6 +229,157 @@ export class App {
     for (const s of ['drop', 'progress', 'editor']) $(`#screen-${s}`).hidden = s !== screen;
     if (screen !== 'editor') this.player.pause();
     if (screen === 'editor') this.timeline.render();
+    if (screen === 'drop') void this.refreshModels();
+  }
+
+  // ---- processing options and models -------------------------------------------------
+
+  /** Whether an option is on (GPU-only options are off without a GPU). */
+  private optOn(key: OptionKey) {
+    const m = MODELS.find((x) => x.option === key)!;
+    return this.options[key] && !(m.gpuOnly && this.gpu && !this.gpu.gpu);
+  }
+
+  private bindModels() {
+    for (const m of MODELS) {
+      try { const v = localStorage.getItem(`stemlight.${m.option}`); if (v !== null) this.options[m.option] = v === '1'; } catch { /* storage blocked */ }
+    }
+    this.downloader.onChange = () => {
+      // A model finished (or the queue stopped): look again at what's stored.
+      if (this.downloader.current?.id !== this.lastDownload) void this.refreshModels();
+      else this.renderModels();
+      this.lastDownload = this.downloader.current?.id;
+    };
+    $('#models-download').addEventListener('click', () => {
+      void this.downloader.download(MODELS.filter((m) => this.optOn(m.option) && !this.cached.has(m.id)).map((m) => m.id));
+    });
+    $('#models-stop').addEventListener('click', () => this.downloader.stop());
+    $('#songs-clear').addEventListener('click', async () => {
+      if (!confirm('Clear the stems, vocals and lyrics saved for every song? Songs will be fully processed again next time.')) return;
+      for (const k of await songCacheKeys()) await idbDelete(k);
+      void this.refreshModels();
+    });
+    $('#models-remove').addEventListener('click', async () => {
+      if (!confirm('Remove the downloaded models from this browser? They’ll download again when a song needs them.')) return;
+      await removeModels();
+      void this.refreshModels();
+    });
+    this.renderModels();
+    void detectGpu().then((g) => { this.gpu = g; void this.refreshModels(); });
+  }
+
+  private lastDownload?: ModelId;
+
+  private async refreshModels() {
+    if (!this.gpu) return this.renderModels();
+    this.cached = await cachedModels(this.gpu);
+    this.savedSongs = new Set((await songCacheKeys()).map((k) => k.split(':')[2])).size;
+    this.renderModels();
+  }
+
+  /**
+   * Process the current song again from scratch: forget its saved stems, vocals, lyrics and
+   * vocal timing, then load it as if new (with the current options).
+   */
+  private async rerunFresh() {
+    if (!this.lastFiles.length) return;
+    const msg = this.separating
+      ? 'This song is still being processed. Stop and start over from scratch?'
+      : 'Process this song again from scratch? Results saved from earlier runs (stems, vocals, lyrics) are discarded, and track edits (names, nudges, slider settings) are reset.';
+    if (!confirm(msg)) return;
+    this.cancelSeparation();
+    const hash = this.fileHash;
+    for (const k of await songCacheKeys()) if (k.split(':')[2] === hash) await idbDelete(k);
+    // Keep lyrics the user typed; a Whisper transcript is made again.
+    $<HTMLTextAreaElement>('#lyrics-text').value = this.lyricsFromUser ? this.lyricsText : '';
+    void this.load(this.lastFiles);
+  }
+
+  /** The model list on the start screen: what each option needs, and whether it's here yet. */
+  private renderModels() {
+    const g = this.gpu;
+    const sizeOf = (id: ModelId) => modelBytes(id, g ?? { gpu: true, f16: true });
+    const dl = this.downloader;
+    const rows = MODELS.map((m) => {
+      const noGpu = !!g && m.gpuOnly && !g.gpu;
+      const box = el('input', { type: 'checkbox', id: `opt-${m.option}`, checked: this.options[m.option] && !noGpu });
+      box.disabled = noGpu || (m.sub && !this.options.separate);
+      box.addEventListener('change', () => {
+        this.options[m.option] = box.checked;
+        try { localStorage.setItem(`stemlight.${m.option}`, box.checked ? '1' : '0'); } catch { /* ignore */ }
+        this.renderModels();
+      });
+      const tags: string[] = [];
+      if (m.gpuOnly) tags.push(noGpu ? 'Needs a GPU, none found' : 'Needs a GPU');
+      else if (m.gpuPreferred && g && !g.gpu) tags.push('Slow without a GPU');
+
+      let status: HTMLElement;
+      if (noGpu) status = el('span', { class: 'model-chip off' }, 'Unavailable');
+      else if (this.cached.has(m.id)) status = el('span', { class: 'model-chip ok' }, '✓ Downloaded');
+      else if (dl.current?.id === m.id) {
+        const pct = dl.current.total ? Math.min(1, dl.current.loaded / dl.current.total) : 0;
+        status = el('span', { class: 'model-chip busy' },
+          Object.assign(el('progress', { max: 1 }), { value: pct }),
+          `${Math.round(pct * 100)}%`);
+      } else if (dl.queued(m.id)) status = el('span', { class: 'model-chip' }, 'Queued');
+      else {
+        status = el('button', { class: 'btn small', type: 'button' }, 'Download');
+        status.setAttribute('aria-label', `Download the ${m.model} model (${formatMB(sizeOf(m.id))})`);
+        status.addEventListener('click', () => void dl.download([m.id]));
+      }
+      return el('li', { class: `model-row${m.sub ? ' sub' : ''}${box.disabled ? ' disabled' : ''}` },
+        el('label', { class: 'model-main', htmlFor: box.id },
+          box,
+          el('span', { class: 'model-text' },
+            el('span', { class: 'model-title' }, m.title, ...tags.map((t) => el('span', { class: 'model-tag' }, t))),
+            el('span', { class: 'muted small' }, m.desc),
+          ),
+        ),
+        el('span', { class: 'model-meta' },
+          el('span', { class: 'model-size small muted', title: `${m.model} model` }, formatMB(sizeOf(m.id))),
+          status,
+        ),
+      );
+    });
+    $('#model-list').replaceChildren(...rows);
+
+    // Summary and bulk actions.
+    const selected = MODELS.filter((m) => this.optOn(m.option) && (!m.sub || this.options.separate));
+    const missing = selected.filter((m) => !this.cached.has(m.id));
+    const missingBytes = missing.reduce((a, m) => a + sizeOf(m.id), 0);
+    const summary = $('#model-summary');
+    summary.className = `small${selected.length && !missing.length ? ' ok' : ''}`;
+    summary.textContent = dl.busy
+      ? 'Downloading… You can drop a song now: its tracks start right away, and the models are used as soon as they’re ready.'
+      : !selected.length
+      ? 'No models selected: you’ll get the always-included tracks only.'
+      : !missing.length
+        ? `✓ All ${selected.length} selected model${selected.length > 1 ? 's are' : ' is'} downloaded. Songs start processing right away.`
+        : `${formatMB(missingBytes)} still to download for the selected options. This happens automatically the first time a song needs it, or you can do it now.`;
+    const btn = $<HTMLButtonElement>('#models-download');
+    btn.disabled = dl.busy || !missing.length;
+    btn.textContent = dl.busy
+      ? `Downloading ${dl.current ? MODELS.find((m) => m.id === dl.current!.id)!.model : ''}…`
+      : missing.length ? `Download selected (${formatMB(missingBytes)})` : 'Selected models downloaded';
+    $('#models-stop').hidden = !dl.busy;
+    $('#models-remove').hidden = dl.busy || !this.cached.size;
+    const clear = $('#songs-clear');
+    clear.hidden = !this.savedSongs;
+    clear.textContent = `Clear saved song results (${this.savedSongs} song${this.savedSongs === 1 ? '' : 's'})`;
+    const err = $('#model-error');
+    err.hidden = !dl.error;
+    err.textContent = dl.error ?? '';
+
+    const note = $('#gpu-note');
+    note.hidden = !g;
+    if (g) {
+      note.className = `gpu-note small${g.gpu ? ' ok' : ' warn'}`;
+      note.textContent = g.gpu
+        ? '✓ GPU found: models run on your graphics card (WebGPU).'
+        : /firefox/i.test(navigator.userAgent)
+          ? 'No GPU available: Firefox doesn’t offer WebGPU on this system yet. Models run on the CPU, which works but is several times slower, and GPU-only options are off. Chrome or Edge can use your GPU.'
+          : 'No usable GPU (WebGPU) found: models run on the CPU, which works but is slower, and GPU-only options are off.';
+    }
   }
 
   private progress(stage: string, fraction: number) {
@@ -240,7 +413,6 @@ export class App {
   private async load(files: File[]) {
     this.cancelSeparation();
     const id = ++this.loadId;
-    this.stemsPending = false;
     const supplied = new Map<StemName, File>();
     const others: File[] = [];
     for (const f of files) {
@@ -250,11 +422,14 @@ export class App {
     }
     const file = others[0] ?? files[0];
     if (!others.length) supplied.forEach((f, k) => { if (f === file) supplied.delete(k); });
-    this.wantStems = $<HTMLInputElement>('#opt-separate').checked;
+    this.wantStems = this.optOn('separate');
+    this.lastFiles = files;
+    this.lyricsText = $<HTMLTextAreaElement>('#lyrics-text').value.trim();
+    this.lyricsFromUser = !!this.lyricsText;
+    this.planPipeline(supplied);
     this.show('progress');
     this.progress(`Decoding ${file.name}`, 0.02);
     $('#progress-error').hidden = true;
-    this.setStemStatus();
     this.renderStemStrip();
     try {
       const bytes = await file.arrayBuffer();
@@ -274,13 +449,31 @@ export class App {
       this.params = defaultParams();
       this.emissions = this.leadEmissions = undefined;
       this.alignSources = [];
-      this.lyricsText = $<HTMLTextAreaElement>('#lyrics-text').value.trim();
       this.progress('Analyzing', 0.1);
       this.send({ type: 'analyze', mono, sr: ANALYSIS_SR, params: this.params }, [mono.buffer]);
       if (supplied.size || this.wantStems) void this.stemPipeline(buffer, supplied, id);
     } catch (err) {
       this.fail(err instanceof Error ? `Could not decode this file: ${err.message}` : 'Could not decode this file.');
     }
+  }
+
+  /** The steps this song will go through, from the options and any supplied stems. */
+  private planPipeline(supplied: Map<StemName, File>) {
+    const steps: [StepId, string][] = [['mix', 'Beats, bars and sections']];
+    if (supplied.size || this.wantStems) {
+      const ownVocals = supplied.has('vocals');
+      const pasted = !!this.lyricsText;
+      const transcribe = !pasted && this.optOn('lyrics');
+      steps.push(['stems', supplied.size ? 'Your stem files' : 'Stem separation (drums, bass, vocals, other)']);
+      steps.push(['notes', 'Notes and vocal melody']);
+      if (this.optOn('hqVocals') && !ownVocals) steps.push(['hq', 'High-quality vocals']);
+      if (this.optOn('lead') && !ownVocals) steps.push(['lead', 'Lead and backing vocals']);
+      if (transcribe) steps.push(['lyrics', 'Lyrics transcription']);
+      if (pasted || transcribe || this.optOn('align')) steps.push(['align', pasted || transcribe ? 'Lyric alignment' : 'Precise vocal syllables']);
+      steps.push(['tracks', 'Final tracks']);
+    }
+    this.plan(steps);
+    this.step('mix', { state: 'active' });
   }
 
   // ---- stems, high-quality vocals, lyrics ------------------------------------------
@@ -295,21 +488,30 @@ export class App {
    * Each stage adds or refines tracks as it finishes.
    */
   private async stemPipeline(buffer: AudioBuffer, supplied: Map<StemName, File>, id: number) {
-    const wantHq = $<HTMLInputElement>('#opt-hq-vocals').checked;
-    const wantLyrics = $<HTMLInputElement>('#opt-lyrics').checked;
-    const wantLead = $<HTMLInputElement>('#opt-lead').checked;
-    const wantAlign = $<HTMLInputElement>('#opt-align').checked;
+    const wantHq = this.optOn('hqVocals');
+    const wantLyrics = this.optOn('lyrics');
+    const wantLead = this.optOn('lead');
+    const wantAlign = this.optOn('align');
     const live = () => id === this.loadId;
+    /** Update a step, unless a newer song has replaced this one. */
+    const step = (s: StepId, patch: Partial<Step>) => { if (live()) this.step(s, patch); };
     let stereo: { left: Float32Array; right: Float32Array } | undefined;
     const getStereo = async () => (stereo ??= await toStereo(buffer, SEPARATOR_SR));
-    const notes: string[] = [];
-    this.pipelineNotes = '';
     this.separating = true;
+    let current: StepId = 'stems';
     try {
+      // Models downloading from the start screen finish first (they'd otherwise download twice).
+      if (this.downloader.busy) {
+        step('stems', { state: 'active', detail: 'waiting for the model download to finish…' });
+        await this.downloader.idle();
+        if (!live()) return;
+      }
+
       // 1. Stems.
       let stems: StemAudio;
+      step('stems', { state: 'active' });
       if (supplied.size) {
-        this.setStemStatus(`Decoding ${supplied.size} stem file${supplied.size > 1 ? 's' : ''}…`, false, true);
+        step('stems', { detail: `decoding ${supplied.size} file${supplied.size > 1 ? 's' : ''}…` });
         stems = {};
         for (const [name, f] of supplied) stems[name] = await decodeMono(f, this.player.ctx, ANALYSIS_SR);
       } else {
@@ -317,18 +519,19 @@ export class App {
         if (cached) {
           stems = {};
           for (const n of STEM_NAMES) if (cached[n]) stems[n] = fromInt16(cached[n]);
+          step('stems', { state: 'done', detail: REUSED });
         } else {
-          this.setStemStatus('Preparing stem separation…', false, true);
+          step('stems', { detail: 'preparing…' });
           const { left, right } = await getStereo();
           let m: FromSeparator;
           try {
-            m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice() }, 'Separating stems', live);
+            m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice() }, 'stems', 'separating', live);
           } catch (err) {
             if (!(err instanceof Error && err.message === 'needs-gpu-memory')) throw err;
             // Out of GPU memory: start over on the CPU in a fresh worker.
             this.freeSeparator();
-            notes.push('The GPU ran out of memory, so stems were separated on the CPU. Closing other GPU-heavy tabs or apps can help.');
-            m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice(), cpuOnly: true }, 'Separating stems', live);
+            step('stems', { note: 'The GPU ran out of memory, so stems were separated on the CPU. Closing other GPU-heavy tabs or apps can help.' });
+            m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice(), cpuOnly: true }, 'stems', 'separating', live);
           }
           if (m.type !== 'done') return;
           stems = m.stems;
@@ -336,19 +539,21 @@ export class App {
         }
       }
       if (!live()) return;
-      this.useStems(stems, 'stems');
+      this.useStems(stems);
+      step('stems', { state: 'done' });
+
       // Notes in guitars, keys and the like, and the sung melody (Basic Pitch, small and quick
       // even on the CPU).
+      current = 'notes';
+      step('notes', { state: 'active' });
       for (const stem of ['other', 'vocals'] as const) {
         const audio = stems[stem];
         if (!audio) continue;
-        const m = await this.separatorJob({ type: 'notes', audio: audio.slice() }, stem === 'other' ? 'Finding notes' : 'Finding the vocal melody', live);
+        const m = await this.separatorJob({ type: 'notes', audio: audio.slice() }, 'notes', stem === 'other' ? 'instrument notes' : 'vocal melody', live);
         if (!live()) return;
-        if (m.type === 'notes') {
-          this.stemsPending = true;
-          this.send({ type: 'pitch', stem, frames: m.frames, params: this.params }, [m.frames.note.buffer, m.frames.onset.buffer, m.frames.times.buffer]);
-        }
+        if (m.type === 'notes') this.send({ type: 'pitch', stem, frames: m.frames, params: this.params }, [m.frames.note.buffer, m.frames.onset.buffer, m.frames.times.buffer]);
       }
+      step('notes', stems.other || stems.vocals ? { state: 'done' } : { state: 'skipped', detail: 'no vocals or other stem' });
       let vocals = stems.vocals;
       let vocalsVariant = 'htdemucs';
       /** The lead singer alone, when separated: aligned together with the full vocals. */
@@ -356,20 +561,22 @@ export class App {
 
       // 2. High-quality vocals (GPU only).
       if (wantHq && !supplied.has('vocals') && vocals) {
+        current = 'hq';
+        step('hq', { state: 'active' });
         const cached = await idbGet<Int16Array>(this.cacheKey('vocals-hq'));
         let hq: Float32Array | undefined = cached ? fromInt16(cached) : undefined;
         if (!hq) {
-          this.setStemStatus('Preparing high-quality vocals…', false, true);
+          step('hq', { detail: 'preparing…' });
           const { left, right } = await getStereo();
           try {
-            const m = await this.separatorJob({ type: 'vocals-hq', left: left.slice(), right: right.slice() }, 'Separating high-quality vocals', live);
+            const m = await this.separatorJob({ type: 'vocals-hq', left: left.slice(), right: right.slice() }, 'hq', 'separating', live);
             if (m.type === 'vocals-hq') {
               hq = m.vocals;
               void idbPut(this.cacheKey('vocals-hq'), toInt16(hq));
             }
           } catch (err) {
-            if (err instanceof Error && err.message === 'needs-gpu') notes.push('High-quality vocals need a GPU (WebGPU), so the standard vocals were used.');
-            else if (err instanceof Error && err.message === 'needs-gpu-memory') notes.push('There wasn’t enough free GPU memory for high-quality vocals, so the standard vocals were used. Closing other GPU-heavy tabs or apps can help.');
+            if (err instanceof Error && err.message === 'needs-gpu') step('hq', { state: 'skipped', note: 'High-quality vocals need a GPU (WebGPU), so the standard vocals were used.' });
+            else if (err instanceof Error && err.message === 'needs-gpu-memory') step('hq', { state: 'skipped', note: 'There wasn’t enough free GPU memory for high-quality vocals, so the standard vocals were used. Closing other GPU-heavy tabs or apps can help.' });
             else throw err;
           }
         }
@@ -377,19 +584,22 @@ export class App {
         if (hq) {
           vocals = hq;
           vocalsVariant = 'roformer';
-          this.useStems({ vocals: hq }, 'high-quality vocals');
+          this.useStems({ vocals: hq });
+          step('hq', { state: 'done', detail: cached ? REUSED : undefined });
         }
       }
 
       // 3. Lead vocals without the backing vocals (GPU only).
       if (wantLead && !supplied.has('vocals') && vocals) {
+        current = 'lead';
+        step('lead', { state: 'active' });
         const cached = await idbGet<Int16Array>(this.cacheKey('lead'));
         let lead: Float32Array | undefined = cached ? fromInt16(cached) : undefined;
         if (!lead) {
-          this.setStemStatus('Preparing lead vocal separation…', false, true);
+          step('lead', { detail: 'preparing…' });
           const { left, right } = await getStereo();
           try {
-            const m = await this.separatorJob({ type: 'lead', left: left.slice(), right: right.slice() }, 'Separating lead vocals', live);
+            const m = await this.separatorJob({ type: 'lead', left: left.slice(), right: right.slice() }, 'lead', 'separating', live);
             if (m.type === 'lead') {
               lead = m.lead;
               void idbPut(this.cacheKey('lead'), toInt16(lead));
@@ -397,12 +607,12 @@ export class App {
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             if (msg === 'cancelled') throw err;
-            if (msg === 'needs-gpu') notes.push('Separating lead and backing vocals needs a GPU (WebGPU), so it was skipped.');
-            else if (msg === 'needs-gpu-memory') notes.push('There wasn’t enough free GPU memory to separate lead and backing vocals. Closing other GPU-heavy tabs or apps can help.');
+            if (msg === 'needs-gpu') step('lead', { state: 'skipped', note: 'Separating lead and backing vocals needs a GPU (WebGPU), so it was skipped.' });
+            else if (msg === 'needs-gpu-memory') step('lead', { state: 'skipped', note: 'There wasn’t enough free GPU memory to separate lead and backing vocals. Closing other GPU-heavy tabs or apps can help.' });
             else {
               // E.g. the model couldn't be downloaded: the rest of the pipeline doesn't need it.
               console.warn('[separator] lead vocals failed', err);
-              notes.push(`Separating lead and backing vocals failed (${msg}), so it was skipped.`);
+              step('lead', { state: 'failed', note: `Separating lead and backing vocals failed (${msg}), so it was skipped.` });
             }
             this.freeSeparator();
           }
@@ -410,8 +620,8 @@ export class App {
         if (!live()) return;
         if (lead) {
           leadVocals = lead;
-          this.stemsPending = true;
           this.send({ type: 'lead', lead: lead.slice(), sr: ANALYSIS_SR, params: this.params });
+          step('lead', { state: 'done', detail: cached ? REUSED : undefined });
         }
       }
 
@@ -423,10 +633,13 @@ export class App {
       let lyricWords: LyricWord[] = this.lyricsText ? parseLyrics(this.lyricsText) : [];
       let hints: WordHint[] | undefined;
       if (!lyricWords.length && wantLyrics && vocals) {
+        current = 'lyrics';
+        step('lyrics', { state: 'active' });
         const key = this.cacheKey('lyrics', vocalsVariant);
         let words = await idbGet<AsrWord[]>(key);
+        const reused = !!words;
         if (!words) {
-          this.setStemStatus('Preparing lyrics transcription…', false, true);
+          step('lyrics', { detail: 'preparing…' });
           const audio16k = await resample(vocals, ANALYSIS_SR, 16000);
           try {
             words = await this.lyricsJob(audio16k.slice(), live);
@@ -434,7 +647,7 @@ export class App {
             if (!(err instanceof Error && err.message === 'needs-gpu-memory')) throw err;
             this.lyricsWorker?.terminate();
             this.lyricsWorker = undefined;
-            notes.push('The GPU ran out of memory, so lyrics were transcribed on the CPU.');
+            step('lyrics', { note: 'The GPU ran out of memory, so lyrics were transcribed on the CPU.' });
             words = await this.lyricsJob(audio16k, live, true);
           }
           if (words) void idbPut(key, words);
@@ -444,28 +657,36 @@ export class App {
         this.lyricsWorker = undefined;
         if (!live()) return;
         if (!words) throw new Error('no lyrics were returned');
-        this.stemsPending = true;
         // Whisper's own timing first; the letter-level alignment below refines it.
         this.send({ type: 'lyrics', words, params: this.params });
         ({ words: lyricWords, hints } = wordsFromAsr(words));
         this.lyricsText = lyricLines(lyricWords);
+        step('lyrics', { state: 'done', detail: reused ? REUSED : `${words.length} words` });
       }
       if (vocals) this.alignSources = [{ audio: vocals, variant: vocalsVariant }, ...(leadVocals ? [{ audio: leadVocals, variant: 'lead' }] : [])];
       // Pasted or transcribed lyrics always get aligned; without lyrics, the same model still
       // gives precise syllables.
       if (vocals && (lyricWords.length || wantAlign)) {
+        current = 'align';
         try {
-          await this.alignLyrics(lyricWords, hints, live, notes);
+          await this.alignLyrics(lyricWords, hints, live);
         } catch (err) {
           if (err instanceof Error && err.message === 'cancelled') throw err;
           console.warn('[lyrics] vocal timing failed', err);
-          notes.push(`Precise vocal timing failed (${err instanceof Error ? err.message : String(err)}).`);
+          step('align', { state: 'failed', note: `Precise vocal timing failed (${err instanceof Error ? err.message : String(err)}).` });
         }
         this.freeSeparator();
       }
+      if (!live()) return;
       this.separating = false;
-      this.pipelineNotes = notes.join(' ');
-      this.setStemStatus(this.pipelineNotes, false);
+      // Steps the song had no input for (e.g. supplied stems without vocals).
+      for (const s of this.steps) {
+        if (s.id === 'tracks') continue;
+        if (s.state === 'pending') s.state = 'skipped';
+        else if (s.state === 'active') Object.assign(s, { state: 'done', fraction: undefined });
+      }
+      this.step('tracks', { state: 'active', detail: 'adding the last tracks…' });
+      this.maybeFinish();
     } catch (err) {
       this.separating = false;
       if (/crashed/.test(String(err))) {
@@ -474,12 +695,19 @@ export class App {
       }
       if (!live()) return;
       const msg = err instanceof Error ? err.message : String(err);
-      this.setStemStatus(msg === 'cancelled' ? 'Cancelled.' : `Something went wrong: ${msg}`, msg !== 'cancelled');
+      if (msg === 'cancelled') this.endSteps('Cancelled');
+      else {
+        this.step(current, { state: 'failed', note: `Something went wrong: ${msg}` });
+        this.endSteps('Not run');
+      }
     }
   }
 
-  /** Run one separator job, mirroring its progress in the banner. */
-  private separatorJob(msg: ToSeparator, label: string, live: () => boolean): Promise<FromSeparator> {
+  /**
+   * Run one separator job, mirroring its progress in the step list.
+   * `doing` describes the work (e.g. "separating"), shown with the backend and progress.
+   */
+  private separatorJob(msg: ToSeparator, stepId: StepId, doing: string, live: () => boolean): Promise<FromSeparator> {
     this.separator ??= new Worker(new URL('../separation/worker.ts', import.meta.url), { type: 'module' });
     const worker = this.separator;
     let segStart = 0;
@@ -489,15 +717,20 @@ export class App {
         if (!live()) return;
         const m = e.data;
         if (m.type === 'download') {
-          const mb = (n: number) => (n / 1e6).toFixed(0);
-          const what = { htdemucs: 'separation model', roformer: 'high-quality vocal model', lead: 'lead vocal model', aligner: 'lyrics alignment model', notes: 'note model' }[m.model];
-          this.setStemStatus(m.cached ? `Loading the ${what}…` : `Downloading the ${what} (one time): ${mb(m.loaded)} / ${mb(m.total)} MB`, false, true, m.loaded / m.total);
+          const what = { htdemucs: 'separation model', roformer: 'high-quality vocal model', lead: 'lead vocal model', aligner: 'vocal timing model', notes: 'note model' }[m.model];
+          this.step(stepId, m.cached
+            ? { detail: `loading the ${what}…`, fraction: undefined }
+            : m.loaded >= m.total
+              ? { detail: `checking and storing the ${what}…`, fraction: undefined }
+              : { detail: `downloading the ${what} (one time): ${formatMB(m.loaded)} of ${formatMB(m.total)}`, fraction: m.loaded / m.total });
         } else if (m.type === 'backend') {
           backend = m.backend === 'webgpu' ? 'GPU' : `CPU, ${m.threads} thread${m.threads > 1 ? 's' : ''}`;
           this.showCpuHint(m.backend === 'wasm');
           segStart = performance.now();
+          // The first progress update can take a while on the CPU.
+          this.step(stepId, { detail: `${doing} on the ${backend}: starting…`, fraction: 0 });
         } else if (m.type === 'segment') {
-          this.setStemStatus(`${label} (${backend}): ${m.done} / ${m.total}${eta(segStart, m.done, m.total)}`, false, true, m.done / m.total);
+          this.step(stepId, { detail: `${doing} on the ${backend}: ${Math.round((100 * m.done) / m.total)}%${eta(segStart, m.done, m.total)}`, fraction: m.done / m.total });
         } else if (m.type === 'error') {
           reject(new Error(m.message));
         } else {
@@ -510,7 +743,7 @@ export class App {
     });
   }
 
-  /** Transcribe vocals (16 kHz mono) with Whisper, mirroring progress in the banner. */
+  /** Transcribe vocals (16 kHz mono) with Whisper, mirroring progress in the step list. */
   private lyricsJob(audio16k: Float32Array, live: () => boolean, cpuOnly = false): Promise<AsrWord[] | undefined> {
     this.lyricsWorker ??= new Worker(new URL('../lyrics/worker.ts', import.meta.url), { type: 'module' });
     const worker = this.lyricsWorker;
@@ -521,17 +754,18 @@ export class App {
         if (!live()) return resolve(undefined);
         const m = e.data;
         if (m.type === 'download') {
-          const mb = (n: number) => (n / 1e6).toFixed(0);
-          this.setStemStatus(`Downloading the lyrics model (one time): ${mb(m.loaded)} / ${mb(Math.max(m.total, WHISPER_BYTES))} MB`, false, true, m.loaded / Math.max(m.total, WHISPER_BYTES));
+          const total = Math.max(m.total, WHISPER_BYTES);
+          this.step('lyrics', { detail: `downloading the lyrics model (one time): ${formatMB(m.loaded)} of ${formatMB(total)}`, fraction: m.loaded / total });
         } else if (m.type === 'backend') {
           backend = m.backend === 'webgpu' ? 'GPU' : 'CPU';
           this.showCpuHint(m.backend === 'wasm');
           start = performance.now();
+          this.step('lyrics', { detail: `transcribing on the ${backend}: starting…`, fraction: 0 });
         } else if (m.type === 'progress') {
-          this.setStemStatus(`Transcribing lyrics (${backend}): ${m.done} / ${m.total}${eta(start, m.done, m.total)}`, false, true, m.done / m.total);
+          this.step('lyrics', { detail: `transcribing on the ${backend}: ${m.done} of ${m.total} passages${eta(start, m.done, m.total)}`, fraction: m.done / m.total });
         } else if (m.type === 'error') {
           reject(new Error(m.message));
-        } else {
+        } else if (m.type === 'done') {
           resolve(m.words);
         }
       };
@@ -544,24 +778,25 @@ export class App {
    * Align lyric words to the vocals: character probabilities from the aligner model for each
    * vocal source (cached per song and stem), then Viterbi alignment in the analysis worker.
    */
-  private async alignLyrics(words: LyricWord[], hints: WordHint[] | undefined, live: () => boolean, notes: string[]) {
-    const label = words.length ? 'Aligning lyrics' : 'Finding vocal syllables';
+  private async alignLyrics(words: LyricWord[], hints: WordHint[] | undefined, live: () => boolean) {
+    const step = (patch: Partial<Step>) => { if (live()) this.step('align', patch); };
+    step({ state: 'active' });
     const out: Emissions[] = [];
     for (const [i, src] of this.alignSources.entries()) {
       const key = this.cacheKey('emissions', src.variant);
       let em = await idbGet<Emissions>(key);
       if (!em) {
-        const step = this.alignSources.length > 1 ? ` (${i + 1}/${this.alignSources.length})` : '';
-        this.setStemStatus(`${label}${step}: preparing…`, false, true);
+        const part = this.alignSources.length > 1 ? (i ? 'lead vocal: ' : 'all vocals: ') : '';
+        step({ detail: `${part}preparing…` });
         const audio16k = await resample(src.audio, ANALYSIS_SR, W2V_SR);
         let m: FromSeparator;
         try {
-          m = await this.separatorJob({ type: 'emissions', audio16k: audio16k.slice() }, label + step, live);
+          m = await this.separatorJob({ type: 'emissions', audio16k: audio16k.slice() }, 'align', `${part}listening`, live);
         } catch (err) {
           if (!(err instanceof Error && err.message === 'needs-gpu-memory')) throw err;
           this.freeSeparator();
-          notes.push('The GPU ran out of memory, so vocal timing ran on the CPU.');
-          m = await this.separatorJob({ type: 'emissions', audio16k, cpuOnly: true }, label + step, live);
+          step({ note: 'The GPU ran out of memory, so vocal timing ran on the CPU.' });
+          m = await this.separatorJob({ type: 'emissions', audio16k, cpuOnly: true }, 'align', `${part}listening`, live);
         }
         if (m.type !== 'emissions') return;
         em = m.emissions;
@@ -573,8 +808,8 @@ export class App {
     [this.emissions, this.leadEmissions] = out;
     if (!this.emissions) return;
     await this.sendPron();
-    this.stemsPending = true;
     this.send({ type: 'align', emissions: this.emissions, leadEmissions: this.leadEmissions, words, hints, params: this.params });
+    step({ state: 'done' });
   }
 
   /** Stop the separation worker, freeing its models' memory (they reload from IndexedDB). */
@@ -618,26 +853,33 @@ export class App {
   private async realign(text: string) {
     const words = parseLyrics(text);
     this.lyricsText = text.trim();
+    this.lyricsFromUser = true;
     if (!words.length || this.separating || !this.alignSources.length) return;
     const id = this.loadId;
     const live = () => id === this.loadId;
-    const notes: string[] = [];
+    this.plan([['align', 'Lyric alignment'], ['tracks', 'Updated lyric tracks']]);
     try {
       if (!this.emissions) {
         this.separating = true;
-        await this.alignLyrics(words, undefined, live, notes);
+        await this.alignLyrics(words, undefined, live);
         this.freeSeparator();
       } else {
-        this.stemsPending = true;
         this.send({ type: 'align', emissions: this.emissions, leadEmissions: this.leadEmissions, words, params: this.params });
+        this.step('align', { state: 'done' });
       }
       this.separating = false;
-      this.pipelineNotes = notes.join(' ');
-      this.setStemStatus(this.pipelineNotes, false);
+      if (!live()) return;
+      this.step('tracks', { state: 'active' });
+      this.maybeFinish();
     } catch (err) {
       this.separating = false;
+      if (!live()) return;
       const msg = err instanceof Error ? err.message : String(err);
-      this.setStemStatus(msg === 'cancelled' ? 'Cancelled.' : `Aligning the lyrics failed: ${msg}`, msg !== 'cancelled');
+      if (msg === 'cancelled') this.endSteps('Cancelled');
+      else {
+        this.step('align', { state: 'failed', note: `Aligning the lyrics failed: ${msg}` });
+        this.endSteps('Not run');
+      }
     }
   }
 
@@ -656,28 +898,112 @@ export class App {
     this.separating = false;
   }
 
-  private useStems(stems: StemAudio, from: string) {
+  private useStems(stems: StemAudio) {
     this.player.loadStems(stems, ANALYSIS_SR);
     this.renderStemStrip();
-    const names = (Object.keys(stems) as StemName[]).map((n) => STEM_LABEL[n].toLowerCase());
-    this.stemsPending = true;
-    this.setStemStatus(`Analyzing ${from === 'stems' ? 'stems' : from}: ${names.join(', ')}…`, false, true);
     const copy: StemAudio = {};
     for (const [k, v] of Object.entries(stems)) copy[k as StemName] = v.slice();
     this.send({ type: 'stems', stems: copy, sr: ANALYSIS_SR, params: this.params }, Object.values(copy).map((v) => v.buffer));
   }
 
-  /** The banner above the timeline. No text hides it. */
-  private setStemStatus(text = '', error = false, busy = false, fraction?: number) {
-    const box = $('#stem-status');
+  // ---- processing status -------------------------------------------------------------
+
+  private plan(steps: [StepId, string][]) {
+    this.steps = steps.map(([id, label]) => ({ id, label, state: 'pending' }));
+    this.statusOpen = false;
+    this.statusDismissed = false;
+    $('#stem-hint').hidden = true;
+    this.renderStatus();
+  }
+
+  /** Update one step; a new state clears the previous state's progress and detail. */
+  private step(id: StepId, patch: Partial<Step>) {
+    const s = this.steps.find((x) => x.id === id);
+    if (!s) return;
+    if (patch.state && patch.state !== s.state) {
+      s.fraction = undefined;
+      if (!('detail' in patch)) s.detail = undefined;
+    }
+    Object.assign(s, patch);
+    this.renderStatus();
+  }
+
+  /** Close out unfinished steps (after a cancel or an error); the mix analysis finishes on its own. */
+  private endSteps(why: string) {
+    for (const s of this.steps) {
+      if (s.id !== 'mix' && s.state === 'pending' || s.state === 'active') Object.assign(s, { state: 'skipped', detail: why, fraction: undefined });
+    }
+    this.renderStatus();
+  }
+
+  /** The pipeline is done once its last analysis results are in. */
+  private maybeFinish() {
+    if (this.separating || this.pendingAnalysis > 0) return;
+    const s = this.steps.find((x) => x.id === 'tracks');
+    if (s && (s.state === 'active' || s.state === 'pending')) this.step('tracks', { state: 'done' });
+  }
+
+  private isBusy() {
+    return this.steps.some((s) => s.state === 'pending' || s.state === 'active');
+  }
+
+  /** The processing panel above the timeline, the export notice and the tab title. */
+  private renderStatus() {
+    const steps = this.steps;
+    const busy = this.isBusy();
+    const finished = steps.filter((s) => s.state !== 'pending' && s.state !== 'active').length;
+    const active = steps.find((s) => s.state === 'active');
+    const fraction = steps.length ? (finished + (active?.fraction ?? 0)) / steps.length : 0;
+    const failed = steps.some((s) => s.state === 'failed');
+    const cancelled = steps.some((s) => s.detail === 'Cancelled');
+    const notes = steps.filter((s) => s.note).length;
+
+    const box = $('#status');
+    box.hidden = !steps.length || (this.statusDismissed && !busy);
+    box.dataset.state = busy ? 'busy' : failed ? 'error' : notes || cancelled ? 'warn' : 'done';
+    $('#status-icon').textContent = busy ? '' : failed ? '!' : notes || cancelled ? '!' : '✓';
+    const n = this.tracks.length;
+    const ready = `${n} track${n === 1 ? '' : 's'} ready to export`;
+    $('#status-title').textContent = busy
+      ? `Still working: step ${Math.min(finished + 1, steps.length)} of ${steps.length}`
+      : cancelled ? 'Cancelled' : failed ? 'Finished, with problems' : 'All done';
+    $('#status-sub').textContent = busy
+      ? 'New tracks are added as each step finishes. You can play and edit in the meantime.'
+      : notes ? `${ready}. See the notes below.` : `${ready}.`;
+    // Say so when saved results were used: they may come from an older version of the app.
+    const reused = !busy && steps.some((s) => s.detail === REUSED);
+    if (reused) $('#status-sub').textContent += ' Some steps reused results saved from an earlier run.';
+    $('#status-rerun').hidden = !reused;
+    const bar = $<HTMLProgressElement>('#status-bar');
+    bar.hidden = !busy;
+    bar.value = fraction;
+    const open = busy || this.statusOpen || failed || notes > 0;
+    const toggle = $('#status-toggle');
+    toggle.hidden = busy || failed || notes > 0;
+    toggle.textContent = this.statusOpen ? 'Hide steps' : 'Show steps';
+    toggle.setAttribute('aria-expanded', String(open));
+    $('#stem-cancel').hidden = !busy || !this.separating;
+    $('#status-dismiss').hidden = busy;
     if (!busy) $('#stem-hint').hidden = true;
-    box.hidden = !text;
-    box.classList.toggle('error', error);
-    $('#stem-status-text').textContent = text;
-    const bar = $<HTMLProgressElement>('#stem-progress');
-    bar.hidden = fraction === undefined;
-    if (fraction !== undefined) bar.value = fraction;
-    $('#stem-cancel').hidden = !this.separating || !busy;
+
+    const list = $('#status-steps');
+    list.hidden = !open;
+    list.replaceChildren(...steps.map((s) => {
+      const li = el('li', { class: `step ${s.state}` },
+        el('span', { class: 'step-icon', ariaHidden: 'true' }, { done: s.note ? '!' : '✓', active: '', pending: '', skipped: '–', failed: '!' }[s.state]),
+        el('span', { class: 'step-label' }, s.label),
+        el('span', { class: 'step-state visually-hidden' }, ` (${{ done: 'done', active: 'in progress', pending: 'waiting', skipped: 'skipped', failed: 'failed' }[s.state]})`),
+      );
+      if (s.detail) li.append(el('span', { class: 'step-detail muted' }, s.detail));
+      if (s.state === 'active' && s.fraction !== undefined) li.append(Object.assign(el('progress', { class: 'step-bar', max: 1 }), { value: s.fraction }));
+      if (s.note) li.append(el('span', { class: 'step-note' }, s.note));
+      return li;
+    }));
+
+    $('#export-busy').hidden = !busy;
+    const pending = document.querySelector<HTMLElement>('.lane-pending');
+    if (pending) pending.hidden = !busy;
+    document.title = busy ? `${Math.round(fraction * 100)}% · Stemlight` : document.hidden && steps.length && !this.statusDismissed ? '✓ Done · Stemlight' : 'Stemlight';
   }
 
   private renderStemStrip() {
@@ -710,34 +1036,31 @@ export class App {
       this.worker.onmessage = (e: MessageEvent<FromWorker>) => this.onWorker(e.data);
       this.worker.onerror = (e) => this.fail(`Analysis failed: ${e.message}`);
     }
+    if (msg.type !== 'pron') this.pendingAnalysis++;
     this.worker.postMessage(msg, transfer);
   }
 
   private onWorker(msg: FromWorker) {
     if (msg.type === 'progress') {
       if (!$('#screen-progress').hidden) this.progress(msg.stage, msg.fraction);
-    } else if (msg.type === 'error') {
-      this.fail(`Analysis failed: ${msg.message}`);
-    } else {
-      const first = this.tracks.length === 0;
-      this.mergeTracks(msg.tracks);
-      const n = msg.tracks.filter((t) => t.source !== 'mix').length;
-      if (this.stemsPending && n) {
-        this.stemsPending = false;
-        if (!this.separating && !$('#stem-status').classList.contains('error')) {
-          const lyrics = msg.tracks.some((t) => t.id === 'vocals-lyric-words');
-          const added = `Added ${n} instrument${lyrics ? ' and lyric' : ''} tracks from the stems.`;
-          this.setStemStatus(this.pipelineNotes ? `${added} ${this.pipelineNotes}` : added);
-          // Plain success fades out; fallback notes stay until the next song.
-          if (!this.pipelineNotes) setTimeout(() => { if (!this.separating && !this.stemsPending) this.setStemStatus(); }, 4000);
-        }
-      }
-      $('#file-name').textContent = this.fileName;
-      $('#file-meta').textContent = `${formatTime(msg.duration)} · ${msg.bpm.toFixed(1)} BPM`;
-      this.show('editor');
-      if (first) this.timeline.fit();
-      this.refresh();
+      return;
     }
+    // Every message but 'pron' gets exactly one result or error back.
+    this.pendingAnalysis = Math.max(0, this.pendingAnalysis - 1);
+    if (msg.type === 'error') {
+      this.fail(`Analysis failed: ${msg.message}`);
+      return;
+    }
+    const first = this.tracks.length === 0;
+    this.mergeTracks(msg.tracks);
+    $('#file-name').textContent = this.fileName;
+    $('#file-meta').textContent = `${formatTime(msg.duration)} · ${msg.bpm.toFixed(1)} BPM`;
+    this.show('editor');
+    if (first) this.timeline.fit();
+    this.refresh();
+    if (this.steps.find((s) => s.id === 'mix')?.state === 'active') this.step('mix', { state: 'done' });
+    this.maybeFinish();
+    this.renderStatus();
   }
 
   /** Replace generated tracks with fresh results, keeping user renames, nudges, deletions and duplicates. */
@@ -882,6 +1205,10 @@ export class App {
       row.addEventListener('keydown', (e) => { if (e.key === 'Enter') select(); });
       heads.append(row);
     }
+    // While processing, a hint that the list isn't complete yet.
+    const pending = el('div', { class: 'lane-head lane-pending' }, el('span', { class: 'spinner', ariaHidden: 'true' }), 'More tracks on the way…');
+    pending.hidden = !this.isBusy();
+    heads.append(pending);
   }
 
   private renderInspector() {

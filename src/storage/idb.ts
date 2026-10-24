@@ -22,9 +22,12 @@ function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T
   return open().then(
     (db) =>
       new Promise<T>((resolve, reject) => {
-        const req = fn(db.transaction(STORE, mode).objectStore(STORE));
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
+        const t = db.transaction(STORE, mode);
+        const req = fn(t.objectStore(STORE));
+        // A write only counts once its transaction commits: running out of quota (common in
+        // private windows) aborts the transaction after the request itself has succeeded.
+        t.oncomplete = () => resolve(req.result);
+        t.onabort = t.onerror = () => reject(t.error ?? req.error ?? new Error('IndexedDB transaction failed'));
       }),
   );
 }
@@ -34,7 +37,13 @@ export async function idbGet<T>(key: string): Promise<T | undefined> {
 }
 
 export async function idbPut(key: string, value: unknown): Promise<boolean> {
-  try { await tx('readwrite', (s) => s.put(value, key)); return true; } catch { return false; }
+  try {
+    await tx('readwrite', (s) => s.put(value, key));
+    return true;
+  } catch (err) {
+    console.warn(`[idb] couldn't store ${key}`, err);
+    return false;
+  }
 }
 
 export async function idbDelete(key: string): Promise<void> {

@@ -3,6 +3,8 @@ import type { Emissions } from '../align/ctc';
 import type { StemName } from './htdemucs';
 
 export type SeparatorModel = 'htdemucs' | 'roformer' | 'lead' | 'aligner' | 'notes';
+/** Models that are downloaded (Basic Pitch ships with the app). */
+export type PrefetchModel = Exclude<SeparatorModel, 'notes'>;
 
 export type ToSeparator =
   /** HTDemucs: all four stems. */
@@ -15,6 +17,8 @@ export type ToSeparator =
   | { type: 'notes'; audio: Float32Array }
   /** wav2vec2 character probabilities of vocals (16 kHz mono), for aligning lyrics. */
   | { type: 'emissions'; audio16k: Float32Array; cpuOnly?: boolean }
+  /** Download, verify and store a model for later, without running it. */
+  | { type: 'prefetch'; model: PrefetchModel }
   | { type: 'cancel' };
 
 export type FromSeparator =
@@ -26,4 +30,5 @@ export type FromSeparator =
   | { type: 'lead'; lead: Float32Array }
   | { type: 'emissions'; emissions: Emissions }
   | { type: 'notes'; frames: PitchFrames }
+  | { type: 'prefetched'; model: PrefetchModel }
   | { type: 'error'; message: string };

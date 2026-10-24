@@ -29,48 +29,43 @@
           <p class="muted small">Already have stems? Drop them together with the song (files named drums, bass, vocals, other).</p>
           <input id="file-input" type="file" multiple accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac,.opus" hidden />
         </div>
-        <div class="options">
-          <label class="field inline">
-            <span class="field-label">Timing grid</span>
-            <select id="grid-start">
-              <option value="50" selected>50 ms (xLights default)</option>
-              <option value="25">25 ms</option>
-            </select>
-          </label>
-          <div class="option-group">
-            <label class="field inline" title="Runs the HTDemucs model in your browser. Uses the GPU via WebGPU when available.">
-              <input id="opt-separate" type="checkbox" checked />
-              <span>Separate stems (drums, bass, vocals, other) <span class="muted">· 170 MB model, downloaded once</span></span>
-            </label>
-            <label class="field inline sub" title="A second, vocals-only model (Mel-Band RoFormer) with much cleaner vocals. About 3× the work of the stem split, so it only runs on a GPU.">
-              <input id="opt-hq-vocals" type="checkbox" />
-              <span>High-quality vocals <span class="muted">· 464 MB model, needs a GPU (Chrome or Edge)</span></span>
-            </label>
-            <label class="field inline sub" title="A karaoke model (BS-RoFormer) splits the lead singer from backing vocals and harmonies, so syllables and lyrics follow the lead, and backing vocals get their own track. GPU only.">
-              <input id="opt-lead" type="checkbox" />
-              <span>Separate lead and backing vocals <span class="muted">· 210 MB model, needs a GPU</span></span>
-            </label>
-            <label class="field inline sub" title="A speech model (wav2vec2) hears where each sung consonant and vowel starts. It finds vocal syllables far more precisely than the audio alone, and aligns lyrics letter by letter.">
-              <input id="opt-align" type="checkbox" checked />
-              <span>Precise vocal syllables and lyric timing <span class="muted">· 190–380 MB model</span></span>
-            </label>
-            <label class="field inline sub" title="Transcribes the vocals with Whisper when you haven't pasted the lyrics. The words are then aligned to the singing letter by letter.">
-              <input id="opt-lyrics" type="checkbox" />
-              <span>Transcribe lyrics if none are pasted <span class="muted">· 250–320 MB model, best with a GPU</span></span>
+        <section class="setup" aria-labelledby="setup-title">
+          <div class="setup-head">
+            <h2 id="setup-title">What to make</h2>
+            <label class="field inline">
+              <span class="field-label">Timing grid</span>
+              <select id="grid-start">
+                <option value="50" selected>50 ms (xLights default)</option>
+                <option value="25">25 ms</option>
+              </select>
             </label>
           </div>
-        </div>
+          <p class="setup-base">
+            <span class="model-ok" aria-hidden="true">✓</span>
+            <span><strong>Always included:</strong> Sections, Phrases, Bars, Beats, Onsets and Energy. No download needed.</span>
+          </p>
+          <p class="muted small setup-intro">
+            The options below run AI models in this browser. Each model downloads once, is stored in this browser,
+            and loads in seconds after that. You can download them now so your first song doesn’t have to wait.
+          </p>
+          <div id="gpu-note" class="gpu-note small" hidden></div>
+          <ul id="model-list" class="model-list"></ul>
+          <div class="setup-foot">
+            <p id="model-summary" class="small" aria-live="polite"></p>
+            <div class="row">
+              <button id="songs-clear" class="btn small" type="button" title="Stems, vocals and lyrics saved for songs you've processed, reused when you load the same song again" hidden>Clear saved song results</button>
+              <button id="models-remove" class="btn small" type="button" hidden>Remove downloaded models</button>
+              <button id="models-stop" class="btn small" type="button" hidden>Stop</button>
+              <button id="models-download" class="btn primary" type="button">Download selected models</button>
+            </div>
+          </div>
+          <p id="model-error" class="error small" role="alert" hidden></p>
+        </section>
         <details class="lyrics-box" id="lyrics-box">
           <summary>Paste the lyrics <span class="muted">(optional, gives the best word, syllable and phoneme timing)</span></summary>
           <textarea id="lyrics-text" rows="8" spellcheck="false" placeholder="One lyric line per line, in the order they're sung, repeats included. [Chorus] tags and blank lines are ignored."></textarea>
           <p class="muted small">With stems on, the lyrics are aligned to the vocals letter by letter (the precise vocal timing model).</p>
         </details>
-        <p class="muted small center">
-          You get Sections, Phrases, Bars, Beats (1–4), Onsets and Energy tracks right away. With stems you also get
-          Vocal phrases and syllables, Kick, Snare, Hats, Bass notes and Other accents. With lyrics (pasted or
-          transcribed) you also get Lyric lines, Lyric words, labeled syllables and a Lyrics track with phrases, words
-          and phonemes for singing faces.
-        </p>
       </section>
 
       <section id="screen-progress" class="screen" hidden>
@@ -102,14 +97,25 @@
           <span class="spacer"></span>
           <span class="file-info"><strong id="file-name"></strong> <span id="file-meta" class="muted"></span></span>
           <button id="edit-lyrics" class="btn small" title="Paste or correct the lyrics and align them again">Lyrics…</button>
+          <button id="rerun" class="btn small" title="Process this song again from scratch, ignoring results saved from earlier runs">Re-run</button>
           <button id="new-file" class="btn small">New song</button>
         </div>
-        <div id="stem-status" class="stem-status" role="status" hidden>
-          <span id="stem-status-text"></span>
-          <progress id="stem-progress" max="1" value="0" hidden></progress>
-          <button id="stem-cancel" class="btn small" hidden>Cancel</button>
-          <span id="stem-hint" class="muted small stem-hint" hidden></span>
-        </div>
+        <section id="status" class="status" hidden>
+          <div class="status-head">
+            <span id="status-icon" class="status-icon" aria-hidden="true"></span>
+            <div class="status-text">
+              <strong id="status-title" role="status"></strong>
+              <span id="status-sub" class="muted small"></span>
+            </div>
+            <progress id="status-bar" max="1" value="0"></progress>
+            <button id="status-rerun" class="btn small" type="button" title="Process this song again, ignoring results saved from earlier runs" hidden>Re-run from scratch</button>
+            <button id="status-toggle" class="btn small" type="button" aria-expanded="false" aria-controls="status-steps">Details</button>
+            <button id="stem-cancel" class="btn small" type="button">Cancel</button>
+            <button id="status-dismiss" class="icon-btn" type="button" aria-label="Dismiss" title="Dismiss">✕</button>
+          </div>
+          <ol id="status-steps" class="status-steps"></ol>
+          <p id="stem-hint" class="muted small status-hint" hidden></p>
+        </section>
         <p class="hint muted small">Scroll to pan, Ctrl/⌘ + scroll to zoom, click to seek. Turn on <span class="kbd">🎧</span> on a track to hear clicks on its marks while playing.</p>
 
         <details id="lights-panel" class="lights-panel" open>
@@ -130,6 +136,7 @@
           <section class="panel">
             <h2>Export</h2>
             <p id="export-count" class="muted small"></p>
+            <p id="export-busy" class="notice small" hidden>Still processing: more tracks are on the way. Exporting now leaves them out.</p>
             <label class="field inline">
               <span class="field-label">Grid</span>
               <select id="grid">
