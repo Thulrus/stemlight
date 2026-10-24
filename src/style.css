@@ -100,7 +100,6 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
 
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .field.inline { flex-direction: row; align-items: center; gap: 8px; margin: 0; }
-.field.disabled { color: var(--text-dim); }
 .field-label { font-weight: 600; font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
 .field input[type='range'] { width: 100%; accent-color: var(--accent); }
 .text-input, select {
@@ -167,7 +166,7 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
 
 .timeline {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 260px 1fr;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
@@ -194,6 +193,54 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .lane-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .lane-count { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .audition.on { color: var(--accent-text); background: var(--accent); }
+
+.stem-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.strip-label { font-size: 12px; color: var(--text-dim); }
+.stem-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 3px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.ms {
+  font: 600 11px/1 system-ui, sans-serif;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ms.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+.ms.solo.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.ms:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.stem-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.stem-status.error { border-left-color: var(--danger); color: var(--danger); }
+.stem-status progress { flex: 1; min-width: 120px; max-width: 360px; height: 8px; }
+
+.lane-src {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  flex: none;
+}
+.lane-src:empty { display: none; }
 
 .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }

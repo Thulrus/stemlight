@@ -19,12 +19,16 @@ export type Features = {
   melDb: Float32Array;
   /** Chroma, row-major [frame * 12 + pitchClass], each frame L2-normalized. */
   chroma: Float32Array;
-  /** RMS per frame (linear). */
+  /** RMS per frame (linear), over the full analysis window. */
   rms: Float32Array;
+  /** RMS per frame over a short centered window (~23 ms), for precise span edges. */
+  rmsShort: Float32Array;
   /** Full-band onset strength (spectral flux on log-mel), z-normalized. */
   onset: Float32Array;
   /** Low-band (< ~150 Hz) onset strength, z-normalized. Kick/bass cue for downbeats. */
   onsetLow: Float32Array;
+  /** Center frequency (Hz) of each mel band. */
+  melCenters: Float32Array;
 };
 
 const hzToMel = (hz: number) => 2595 * Math.log10(1 + hz / 700);
@@ -82,7 +86,6 @@ export function computeFeatures(samples: Float32Array, sr: number, onProgress?: 
   const window = new Float64Array(N_FFT);
   for (let i = 0; i < N_FFT; i++) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N_FFT);
   const bands = melFilterbank(sr, N_FFT, N_MELS);
-  const lowBands = bands.map((b, i) => (b.centerHz < 150 ? i : -1)).filter((i) => i >= 0);
 
   // Chroma maps 55 Hz .. 5 kHz bins to pitch classes (A = 0 shifted so C = 0).
   const nBins = N_FFT / 2 + 1;
@@ -97,6 +100,8 @@ export function computeFeatures(samples: Float32Array, sr: number, onProgress?: 
   const melDb = new Float32Array(nFrames * N_MELS);
   const chroma = new Float32Array(nFrames * 12);
   const rms = new Float32Array(nFrames);
+  const rmsShort = new Float32Array(nFrames);
+  const SHORT = 512;
   const re = new Float64Array(N_FFT);
   const im = new Float64Array(N_FFT);
   const power = new Float64Array(nBins);
@@ -113,6 +118,12 @@ export function computeFeatures(samples: Float32Array, sr: number, onProgress?: 
       energy += s * s;
     }
     rms[t] = Math.sqrt(energy / N_FFT);
+    let short = 0;
+    for (let i = center - SHORT / 2; i < center + SHORT / 2; i++) {
+      const v = i >= 0 && i < samples.length ? samples[i] : 0;
+      short += v * v;
+    }
+    rmsShort[t] = Math.sqrt(short / SHORT);
     fft.transform(re, im);
     for (let k = 0; k < nBins; k++) power[k] = re[k] * re[k] + im[k] * im[k];
 
@@ -140,34 +151,7 @@ export function computeFeatures(samples: Float32Array, sr: number, onProgress?: 
   for (let i = 0; i < melDb.length; i++) if (melDb[i] > maxDb) maxDb = melDb[i];
   for (let i = 0; i < melDb.length; i++) melDb[i] = Math.max(melDb[i], maxDb - 80);
 
-  const flux = new Float32Array(nFrames);
-  const fluxLow = new Float32Array(nFrames);
-  for (let t = 1; t < nFrames; t++) {
-    let acc = 0;
-    for (let m = 0; m < N_MELS; m++) {
-      const d = melDb[t * N_MELS + m] - melDb[(t - 1) * N_MELS + m];
-      if (d > 0) acc += d;
-    }
-    flux[t] = acc / N_MELS;
-    let accLow = 0;
-    for (const m of lowBands) {
-      const d = melDb[t * N_MELS + m] - melDb[(t - 1) * N_MELS + m];
-      if (d > 0) accLow += d;
-    }
-    fluxLow[t] = accLow / Math.max(1, lowBands.length);
-  }
-  // A centered 2048-sample window starts registering an attack ~35 ms before its
-  // center reaches it, so flux peaks early. Shift the envelopes later to compensate
-  // (calibrated against synthetic attacks in tests/synthetic.test.ts).
-  const lag = Math.round(ONSET_LATENCY_SEC * fps);
-  const shift = (x: Float32Array) => {
-    const out = new Float32Array(x.length);
-    out.set(x.subarray(0, x.length - lag), lag);
-    return out;
-  };
-  const halfWin = Math.round(0.25 * fps);
-  onProgress?.(1);
-  return {
+  const f: Features = {
     sr,
     hop: HOP,
     fps,
@@ -176,9 +160,39 @@ export function computeFeatures(samples: Float32Array, sr: number, onProgress?: 
     melDb,
     chroma,
     rms,
-    onset: normalizeEnvelope(shift(flux), halfWin),
-    onsetLow: normalizeEnvelope(shift(fluxLow), halfWin),
+    rmsShort,
+    onset: new Float32Array(0),
+    onsetLow: new Float32Array(0),
+    melCenters: Float32Array.from(bands, (b) => b.centerHz),
   };
+  f.onset = bandOnset(f, 0, Infinity);
+  f.onsetLow = bandOnset(f, 0, 150);
+  onProgress?.(1);
+  return f;
+}
+
+/**
+ * Onset strength from the mel bands centered in [loHz, hiHz): positive spectral flux on
+ * the log-mel spectrogram, latency-compensated, local mean removed, scaled to unit RMS.
+ */
+export function bandOnset(f: Features, loHz: number, hiHz: number): Float32Array {
+  const bands: number[] = [];
+  f.melCenters.forEach((c, i) => { if (c >= loHz && c < hiHz) bands.push(i); });
+  const { nFrames, melDb } = f;
+  // A centered 2048-sample window starts registering an attack ~35 ms before its center
+  // reaches it, so flux peaks early. Write each value later to compensate (calibrated
+  // against synthetic attacks in tests/synthetic.test.ts).
+  const lag = Math.round(ONSET_LATENCY_SEC * f.fps);
+  const flux = new Float32Array(nFrames);
+  for (let t = 1; t + lag < nFrames; t++) {
+    let acc = 0;
+    for (const m of bands) {
+      const d = melDb[t * N_MELS + m] - melDb[(t - 1) * N_MELS + m];
+      if (d > 0) acc += d;
+    }
+    flux[t + lag] = acc / Math.max(1, bands.length);
+  }
+  return normalizeEnvelope(flux, Math.round(0.25 * f.fps));
 }
 
 /** Time in seconds of frame `t`'s center. */

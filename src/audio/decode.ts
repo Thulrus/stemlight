@@ -44,3 +44,36 @@ export function computePeaks(buffer: AudioBuffer, binsPerSec = 200): { min: Floa
   }
   return { min, max, binsPerSec: buffer.sampleRate / per };
 }
+
+/** Planar stereo at `sr` (the separator needs 44.1 kHz), resampled via an OfflineAudioContext. */
+export async function toStereo(buffer: AudioBuffer, sr: number): Promise<{ left: Float32Array; right: Float32Array }> {
+  const offline = new OfflineAudioContext(2, Math.ceil(buffer.duration * sr), sr);
+  const src = offline.createBufferSource();
+  src.buffer = buffer;
+  src.connect(offline.destination);
+  src.start();
+  const r = await offline.startRendering();
+  return { left: r.getChannelData(0).slice(), right: r.getChannelData(1).slice() };
+}
+
+/** Decode a file straight to mono at `sr` (used for user-supplied stems). */
+export async function decodeMono(file: File, ctx: AudioContext, sr: number): Promise<Float32Array> {
+  const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
+  const offline = new OfflineAudioContext(1, Math.ceil(buffer.duration * sr), sr);
+  const src = offline.createBufferSource();
+  src.buffer = buffer;
+  src.connect(offline.destination);
+  src.start();
+  return (await offline.startRendering()).getChannelData(0).slice();
+}
+
+/** Which stem a file name refers to, if any (drums.wav, "Song - Vocals.flac", vox, …). */
+export function stemFromFileName(name: string): 'drums' | 'bass' | 'vocals' | 'other' | undefined {
+  // Treat _ - . as word breaks (\b doesn't split on underscores).
+  const n = name.toLowerCase().replace(/\.[^.]+$/, '').replace(/[_\-.]+/g, ' ');
+  if (/\b(drums?|percussion|perc)\b/.test(n)) return 'drums';
+  if (/\bbass\b/.test(n)) return 'bass';
+  if (/\b(vocals?|vox|voice|acapella|a cappella)\b/.test(n)) return 'vocals';
+  if (/\b(other|accompaniment|instrumental|music)\b/.test(n)) return 'other';
+  return undefined;
+}

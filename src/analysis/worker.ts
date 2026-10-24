@@ -1,17 +1,21 @@
 /// <reference lib="webworker" />
 import { computeFeatures, type Features } from '../dsp/features';
-import { analyzeRhythm, mixTracks, type MixParams, type Rhythm } from './analyze';
-import type { FromWorker, ToWorker } from './protocol';
+import type { StemName } from '../separation/htdemucs';
+import { analyzeRhythm, mixTracks, type Rhythm } from './analyze';
+import type { AllParams, FromWorker, ToWorker } from './protocol';
+import { stemTracks } from './stems';
 
 declare const self: DedicatedWorkerGlobalScope;
 
 let features: Features | undefined;
 let rhythm: Rhythm | undefined;
 let rhythmKey = '';
+let stemFeatures: Partial<Record<StemName, Features>> = {};
+let stemSamples: Partial<Record<StemName, Float32Array>> = {};
 
 const post = (m: FromWorker) => self.postMessage(m);
 
-function run(params: MixParams) {
+function run(params: AllParams) {
   if (!features) throw new Error('No audio analyzed yet');
   // Beat tracking is the only stage whose params force re-tracking; everything else reuses it.
   const key = JSON.stringify(params.beats);
@@ -22,6 +26,8 @@ function run(params: MixParams) {
   }
   post({ type: 'progress', stage: 'Finding sections', fraction: 0.95 });
   const { tracks } = mixTracks(features, params, rhythm);
+  // Sections, Phrases, Bars, Beats, then per-instrument tracks, then Onsets and Energy.
+  tracks.splice(4, 0, ...stemTracks(stemFeatures, stemSamples, params, features));
   post({ type: 'result', tracks, bpm: rhythm.bpm, duration: features.duration });
 }
 
@@ -30,9 +36,20 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     const msg = e.data;
     if (msg.type === 'analyze') {
       rhythm = undefined;
+      stemFeatures = {};
+      stemSamples = {};
       features = computeFeatures(msg.mono, msg.sr, (fr) =>
-        post({ type: 'progress', stage: 'Analyzing spectrum', fraction: 0.1 + 0.7 * fr }),
+        post({ type: 'progress', stage: 'Analyzing the mix', fraction: 0.1 + 0.7 * fr }),
       );
+      run(msg.params);
+    } else if (msg.type === 'stems') {
+      const names = Object.keys(msg.stems) as StemName[];
+      names.forEach((name, i) => {
+        stemSamples[name] = msg.stems[name];
+        stemFeatures[name] = computeFeatures(msg.stems[name]!, msg.sr, (fr) =>
+          post({ type: 'progress', stage: `Analyzing ${name}`, fraction: (i + fr) / names.length }),
+        );
+      });
       run(msg.params);
     } else if (msg.type === 'rerun') {
       run(msg.params);

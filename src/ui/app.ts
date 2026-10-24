@@ -1,22 +1,54 @@
-import { DEFAULT_PARAMS, type MixParams } from '../analysis/analyze';
-import type { FromWorker, ToWorker } from '../analysis/protocol';
-import { computePeaks, decodeFile } from '../audio/decode';
+import { DEFAULT_PARAMS } from '../analysis/analyze';
+import type { AllParams, FromWorker, StemAudio, ToWorker } from '../analysis/protocol';
+import { DEFAULT_STEM_PARAMS } from '../analysis/stems';
+import { computePeaks, decodeFile, decodeMono, stemFromFileName, toStereo } from '../audio/decode';
 import { Player } from '../audio/player';
 import { quantizeMarks, type MsMark } from '../core/quantize';
 import type { GridMs, Track } from '../core/types';
 import { ANALYSIS_SR } from '../dsp/features';
 import { fileSafeName, toXTiming } from '../export/xtiming';
+import { SAMPLE_RATE as SEPARATOR_SR, STEM_NAMES, type StemName } from '../separation/htdemucs';
+import { MODEL_TOTAL_BYTES } from '../separation/model';
+import type { FromSeparator, ToSeparator } from '../separation/protocol';
+import { hashBytes, idbGet, idbPut } from '../storage/idb';
 import { tracksToZip } from '../export/zip';
 import { formatTime, LANE_H, RULER_H, Timeline, WAVE_H } from './timeline';
 
-/** Which MixParams group feeds each generated track. */
-const PARAM_GROUP: Record<string, keyof MixParams> = {
+const defaultParams = (): AllParams => structuredClone({ ...DEFAULT_PARAMS, ...DEFAULT_STEM_PARAMS });
+const STEM_LABEL: Record<StemName, string> = { drums: 'Drums', bass: 'Bass', vocals: 'Vocals', other: 'Other' };
+const STEM_CACHE_VERSION = 1;
+
+/** Which parameter group feeds each generated track. */
+const PARAM_GROUP: Record<string, keyof AllParams> = {
   'mix-beats': 'beats', 'mix-bars': 'beats', 'mix-onsets': 'onsets',
   'mix-sections': 'sections', 'mix-phrases': 'phrases', 'mix-energy': 'energy',
+  'drums-kick': 'kick', 'drums-snare': 'snare', 'drums-hats': 'hats', 'bass-notes': 'bassNotes',
+  'vocals-phrases': 'vocalPhrases', 'vocals-syllables': 'vocalSyllables', 'other-accents': 'otherAccents',
 };
 
 type Range = { label: string; min: number; max: number; step: number; hint: string };
-const PARAM_RANGES: Record<keyof MixParams, Record<string, Range>> = {
+const sensitivity = (hint: string): Range => ({ label: 'Sensitivity', min: 0, max: 1, step: 0.05, hint });
+const minGap: Range = { label: 'Min gap (s)', min: 0.03, max: 0.5, step: 0.01, hint: 'Hits closer than this are merged.' };
+const PARAM_RANGES: Record<keyof AllParams, Record<string, Range>> = {
+  kick: { sensitivity: sensitivity('Higher finds softer kicks.'), minGap },
+  snare: { sensitivity: sensitivity('Higher finds softer snare hits and ghost notes.'), minGap },
+  hats: { sensitivity: sensitivity('Higher finds softer hats and cymbals.'), minGap },
+  bassNotes: {
+    thresholdDb: { label: 'Range (dB)', min: 10, max: 50, step: 1, hint: 'How far below the loudest bass a note may be and still count.' },
+    minNote: { label: 'Shortest note (s)', min: 0.03, max: 0.5, step: 0.01, hint: 'Shorter notes are dropped.' },
+    mergeGap: { label: 'Join gap (s)', min: 0, max: 0.3, step: 0.01, hint: 'Gaps shorter than this between notes are closed.' },
+  },
+  vocalPhrases: {
+    thresholdDb: { label: 'Range (dB)', min: 6, max: 40, step: 1, hint: 'Higher counts quieter singing as part of a phrase.' },
+    mergeGap: { label: 'Breath gap (s)', min: 0.05, max: 1.5, step: 0.05, hint: 'Pauses shorter than this don’t end a phrase.' },
+    minDur: { label: 'Shortest phrase (s)', min: 0.1, max: 3, step: 0.05, hint: 'Shorter phrases are dropped.' },
+  },
+  vocalSyllables: {
+    thresholdDb: { label: 'Range (dB)', min: 6, max: 40, step: 1, hint: 'Higher counts quieter syllables.' },
+    sensitivity: sensitivity('Higher splits words into more syllables.'),
+    minDur: { label: 'Shortest syllable (s)', min: 0.05, max: 0.5, step: 0.01, hint: 'Syllables shorter than this are merged.' },
+  },
+  otherAccents: { sensitivity: sensitivity('Higher finds more, softer accents in guitars, keys, strings and horns.'), minGap },
   beats: {
     priorBpm: { label: 'Tempo guess (BPM)', min: 60, max: 200, step: 1, hint: 'Biases the tempo search; change it if beats are double or half speed.' },
     tightness: { label: 'Tightness', min: 20, max: 400, step: 10, hint: 'Higher keeps beats evenly spaced; lower follows the music more loosely.' },
@@ -68,7 +100,14 @@ export class App {
   private timeline!: Timeline;
   private tracks: TrackState[] = [];
   private deleted = new Set<string>();
-  private params: MixParams = structuredClone(DEFAULT_PARAMS);
+  private params: AllParams = defaultParams();
+  private separator?: Worker;
+  private separating = false;
+  /** Stems were sent for analysis and their tracks haven't arrived yet. */
+  private stemsPending = false;
+  private fileHash = '';
+  private loadId = 0;
+  private wantStems = true;
   private gridMs: GridMs = 50;
   private selectedId?: string;
   private auditionId?: string;
@@ -88,7 +127,11 @@ export class App {
     $<HTMLSelectElement>('#grid-start').addEventListener('change', (e) => this.setGrid(Number((e.target as HTMLSelectElement).value) as GridMs));
     $('#export-xtiming').addEventListener('click', () => this.exportCombined());
     $('#export-zip').addEventListener('click', () => this.exportZip());
-    $('#new-file').addEventListener('click', () => this.show('drop'));
+    $('#new-file').addEventListener('click', () => { this.cancelSeparation(); this.show('drop'); });
+    $('#stem-cancel').addEventListener('click', () => this.cancelSeparation());
+    const sep = $<HTMLInputElement>('#opt-separate');
+    try { sep.checked = localStorage.getItem('stemlight.separate') !== '0'; } catch { /* storage blocked */ }
+    sep.addEventListener('change', () => { try { localStorage.setItem('stemlight.separate', sep.checked ? '1' : '0'); } catch { /* ignore */ } });
     this.tick();
   }
 
@@ -110,7 +153,7 @@ export class App {
     const input = $<HTMLInputElement>('#file-input');
     zone.addEventListener('click', () => input.click());
     zone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
-    input.addEventListener('change', () => { if (input.files?.[0]) void this.load(input.files[0]); input.value = ''; });
+    input.addEventListener('change', () => { if (input.files?.length) void this.load([...input.files]); input.value = ''; });
     for (const ev of ['dragenter', 'dragover']) {
       document.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('dragging'); });
     }
@@ -118,17 +161,40 @@ export class App {
       document.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('dragging'); });
     }
     document.addEventListener('drop', (e) => {
-      const f = [...((e as DragEvent).dataTransfer?.files ?? [])].find((f) => f.type.startsWith('audio/') || /\.(mp3|wav|flac|ogg|m4a|aac|opus)$/i.test(f.name));
-      if (f) void this.load(f);
+      const files = [...((e as DragEvent).dataTransfer?.files ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(mp3|wav|flac|ogg|m4a|aac|opus)$/i.test(f.name));
+      if (files.length) void this.load(files);
     });
   }
 
-  private async load(file: File) {
+  /**
+   * Load a song, optionally with user-supplied stems (files named drums/bass/vocals/other).
+   * The full-mix tracks show up first; stems (supplied, cached or separated in the
+   * background) are analyzed and added when ready.
+   */
+  private async load(files: File[]) {
+    this.cancelSeparation();
+    const id = ++this.loadId;
+    this.stemsPending = false;
+    const supplied = new Map<StemName, File>();
+    const others: File[] = [];
+    for (const f of files) {
+      const stem = stemFromFileName(f.name);
+      if (stem && !supplied.has(stem)) supplied.set(stem, f);
+      else others.push(f);
+    }
+    const file = others[0] ?? files[0];
+    if (!others.length) supplied.forEach((f, k) => { if (f === file) supplied.delete(k); });
+    this.wantStems = $<HTMLInputElement>('#opt-separate').checked;
     this.show('progress');
     this.progress(`Decoding ${file.name}`, 0.02);
     $('#progress-error').hidden = true;
+    this.setStemStatus();
+    this.renderStemStrip();
     try {
-      const { buffer, mono } = await decodeFile(file, this.player.ctx);
+      const bytes = await file.arrayBuffer();
+      this.fileHash = await hashBytes(bytes);
+      const { buffer, mono } = await decodeFile(new File([bytes], file.name), this.player.ctx);
+      if (id !== this.loadId) return;
       this.fileName = file.name;
       this.duration = buffer.duration;
       this.player.load(buffer);
@@ -139,12 +205,122 @@ export class App {
       this.deleted.clear();
       this.selectedId = undefined;
       this.auditionId = 'mix-beats';
-      this.params = structuredClone(DEFAULT_PARAMS);
+      this.params = defaultParams();
       this.progress('Analyzing', 0.1);
       this.send({ type: 'analyze', mono, sr: ANALYSIS_SR, params: this.params }, [mono.buffer]);
+      if (supplied.size) void this.loadSuppliedStems(supplied, id);
+      else if (this.wantStems) void this.loadOrSeparateStems(buffer, id);
     } catch (err) {
       this.fail(err instanceof Error ? `Could not decode this file: ${err.message}` : 'Could not decode this file.');
     }
+  }
+
+  // ---- stems -------------------------------------------------------------------
+
+  private async loadSuppliedStems(files: Map<StemName, File>, id: number) {
+    this.setStemStatus(`Decoding ${files.size} stem file${files.size > 1 ? 's' : ''}…`);
+    try {
+      const stems: StemAudio = {};
+      for (const [name, f] of files) stems[name] = await decodeMono(f, this.player.ctx, ANALYSIS_SR);
+      if (id === this.loadId) this.useStems(stems, 'your stem files');
+    } catch (err) {
+      this.setStemStatus(`Could not decode the stem files: ${err instanceof Error ? err.message : err}`, true);
+    }
+  }
+
+  private stemCacheKey() {
+    return `stems:v${STEM_CACHE_VERSION}:${this.fileHash}`;
+  }
+
+  private async loadOrSeparateStems(buffer: AudioBuffer, id: number) {
+    const cached = await idbGet<Record<string, Int16Array>>(this.stemCacheKey());
+    if (id !== this.loadId) return;
+    if (cached) {
+      const stems: StemAudio = {};
+      for (const n of STEM_NAMES) if (cached[n]) stems[n] = Float32Array.from(cached[n], (v) => v / 32767);
+      this.useStems(stems, 'cache');
+      return;
+    }
+    this.separating = true;
+    this.setStemStatus('Preparing stem separation…', false, true);
+    const { left, right } = await toStereo(buffer, SEPARATOR_SR);
+    if (id !== this.loadId) return;
+    const started = performance.now();
+    let segStart = 0;
+    let backend = '';
+    this.separator ??= new Worker(new URL('../separation/worker.ts', import.meta.url), { type: 'module' });
+    this.separator.onmessage = (e: MessageEvent<FromSeparator>) => {
+      if (id !== this.loadId) return;
+      const m = e.data;
+      if (m.type === 'download') {
+        const mb = (n: number) => (n / 1e6).toFixed(0);
+        this.setStemStatus(m.cached ? 'Loading the separation model…' : `Downloading the separation model (one time): ${mb(m.loaded)} / ${mb(MODEL_TOTAL_BYTES)} MB`, false, true, m.loaded / m.total);
+      } else if (m.type === 'backend') {
+        backend = m.backend === 'webgpu' ? 'GPU' : `CPU, ${m.threads} thread${m.threads > 1 ? 's' : ''}`;
+        segStart = performance.now();
+      } else if (m.type === 'segment') {
+        const per = m.done ? (performance.now() - segStart) / m.done : 0;
+        const left = per ? Math.ceil((per * (m.total - m.done)) / 1000) : 0;
+        const eta = m.done ? ` · about ${left >= 90 ? `${Math.round(left / 60)} min` : `${left} s`} left` : '';
+        this.setStemStatus(`Separating stems (${backend}): ${m.done} / ${m.total}${eta}`, false, true, m.done / m.total);
+      } else if (m.type === 'done') {
+        this.separating = false;
+        console.info(`Stem separation took ${((performance.now() - started) / 1000).toFixed(1)} s on ${backend}`);
+        const toCache = Object.fromEntries(STEM_NAMES.map((n) => [n, Int16Array.from(m.stems[n], (v) => Math.round(Math.max(-1, Math.min(1, v)) * 32767))]));
+        void idbPut(this.stemCacheKey(), toCache);
+        this.useStems(m.stems, 'separation');
+      } else if (m.type === 'error') {
+        this.separating = false;
+        this.setStemStatus(m.message === 'cancelled' ? 'Stem separation cancelled.' : `Stem separation failed: ${m.message}`, m.message !== 'cancelled');
+      }
+    };
+    this.separator.postMessage({ type: 'separate', left, right } satisfies ToSeparator, [left.buffer, right.buffer]);
+  }
+
+  private cancelSeparation() {
+    if (this.separating) this.separator?.postMessage({ type: 'cancel' } satisfies ToSeparator);
+    this.separating = false;
+  }
+
+  private useStems(stems: StemAudio, from: string) {
+    this.player.loadStems(stems, ANALYSIS_SR);
+    this.renderStemStrip();
+    const names = (Object.keys(stems) as StemName[]).map((n) => STEM_LABEL[n].toLowerCase());
+    this.stemsPending = true;
+    this.setStemStatus(`Analyzing stems from ${from}: ${names.join(', ')}…`, false, true);
+    const copy: StemAudio = {};
+    for (const [k, v] of Object.entries(stems)) copy[k as StemName] = v.slice();
+    this.send({ type: 'stems', stems: copy, sr: ANALYSIS_SR, params: this.params }, Object.values(copy).map((v) => v.buffer));
+  }
+
+  /** The banner above the timeline. No text hides it. */
+  private setStemStatus(text = '', error = false, busy = false, fraction?: number) {
+    const box = $('#stem-status');
+    box.hidden = !text;
+    box.classList.toggle('error', error);
+    $('#stem-status-text').textContent = text;
+    const bar = $<HTMLProgressElement>('#stem-progress');
+    bar.hidden = fraction === undefined;
+    if (fraction !== undefined) bar.value = fraction;
+    $('#stem-cancel').hidden = !this.separating || !busy;
+  }
+
+  private renderStemStrip() {
+    const strip = $('#stem-strip');
+    const names = this.player.stemNames;
+    strip.hidden = names.length === 0;
+    strip.replaceChildren(
+      el('span', { class: 'strip-label' }, 'Stems'),
+      ...STEM_NAMES.filter((n) => names.includes(n)).map((n) => {
+        const mute = el('button', { class: `ms${this.player.isMuted(n) ? ' on' : ''}`, title: `Mute ${STEM_LABEL[n]}` }, 'M');
+        const solo = el('button', { class: `ms solo${this.player.isSoloed(n) ? ' on' : ''}`, title: `Solo ${STEM_LABEL[n]}` }, 'S');
+        mute.setAttribute('aria-pressed', String(this.player.isMuted(n)));
+        solo.setAttribute('aria-pressed', String(this.player.isSoloed(n)));
+        mute.onclick = () => { this.player.toggleMute(n); this.renderStemStrip(); };
+        solo.onclick = () => { this.player.toggleSolo(n); this.renderStemStrip(); };
+        return el('span', { class: 'stem-chip' }, STEM_LABEL[n], mute, solo);
+      }),
+    );
   }
 
   private fail(message: string) {
@@ -170,6 +346,12 @@ export class App {
     } else {
       const first = this.tracks.length === 0;
       this.mergeTracks(msg.tracks);
+      const n = msg.tracks.filter((t) => t.source !== 'mix').length;
+      if (this.stemsPending && n) {
+        this.stemsPending = false;
+        this.setStemStatus(`Added ${n} instrument tracks from the stems.`);
+        setTimeout(() => { if (!this.separating && !this.stemsPending) this.setStemStatus(); }, 4000);
+      }
       $('#file-name').textContent = this.fileName;
       $('#file-meta').textContent = `${formatTime(msg.duration)} · ${msg.bpm.toFixed(1)} BPM`;
       this.show('editor');
@@ -298,7 +480,8 @@ export class App {
       const row = el('div', { class: `lane-head${this.selectedId === id ? ' selected' : ''}`, tabIndex: 0 },
         include,
         el('span', { class: 'swatch' }),
-        el('span', { class: 'lane-name', title: s.track.name }, s.track.name),
+        el('span', { class: 'lane-name', title: `${s.track.name} (from ${s.track.source})` }, s.track.name),
+        el('span', { class: `lane-src src-${s.track.source}` }, s.track.source === 'mix' ? '' : s.track.source),
         el('span', { class: 'lane-count' }, String(s.track.marks.length)),
         audition,
       );
@@ -365,7 +548,7 @@ export class App {
     );
   }
 
-  private slider(group: keyof MixParams, key: string, r: Range) {
+  private slider(group: keyof AllParams, key: string, r: Range) {
     const params = this.params[group] as Record<string, number>;
     const out = el('output', { class: 'mono' }, String(params[key]));
     const input = el('input', { type: 'range', min: String(r.min), max: String(r.max), step: String(r.step), value: String(params[key]) });

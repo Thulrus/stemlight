@@ -1,4 +1,5 @@
 import type { MsMark } from '../core/quantize';
+import type { StemName } from '../separation/htdemucs';
 
 /** Short synthesized click: a decaying sine. Accented clicks are higher and louder. */
 function makeClick(ctx: BaseAudioContext, freq: number, gain: number, dur = 0.03): AudioBuffer {
@@ -21,7 +22,12 @@ function makeClick(ctx: BaseAudioContext, freq: number, gain: number, dur = 0.03
 export class Player {
   readonly ctx: AudioContext;
   private buffer?: AudioBuffer;
+  private sources: AudioBufferSourceNode[] = [];
   private source?: AudioBufferSourceNode;
+  private readonly mixGain: GainNode;
+  private stems = new Map<StemName, { buffer: AudioBuffer; gain: GainNode }>();
+  private muted = new Set<StemName>();
+  private soloed = new Set<StemName>();
   private readonly musicGain: GainNode;
   private readonly clickGain: GainNode;
   private readonly clicks: { normal: AudioBuffer; accent: AudioBuffer; end: AudioBuffer };
@@ -37,6 +43,8 @@ export class Player {
   constructor() {
     this.ctx = new AudioContext({ latencyHint: 'interactive' });
     this.musicGain = this.ctx.createGain();
+    this.mixGain = this.ctx.createGain();
+    this.mixGain.connect(this.musicGain);
     this.clickGain = this.ctx.createGain();
     this.musicGain.connect(this.ctx.destination);
     this.clickGain.connect(this.ctx.destination);
@@ -51,6 +59,52 @@ export class Player {
     this.stop();
     this.buffer = buffer;
     this.startOffset = 0;
+    for (const s of this.stems.values()) s.gain.disconnect();
+    this.stems.clear();
+    this.muted.clear();
+    this.soloed.clear();
+    this.applyStemGains();
+  }
+
+  /** Make stems available for mute/solo. They play in sync with the mix, switched by gain. */
+  loadStems(stems: Partial<Record<StemName, Float32Array>>, sr: number) {
+    const wasPlaying = this.playing;
+    const t = this.currentTime;
+    this.pause();
+    for (const [name, data] of Object.entries(stems) as [StemName, Float32Array][]) {
+      const buffer = this.ctx.createBuffer(1, data.length, sr);
+      buffer.copyToChannel(data as Float32Array<ArrayBuffer>, 0);
+      const gain = this.ctx.createGain();
+      gain.connect(this.musicGain);
+      this.stems.get(name)?.gain.disconnect();
+      this.stems.set(name, { buffer, gain });
+    }
+    this.applyStemGains();
+    if (wasPlaying) void this.play(t);
+  }
+
+  get stemNames(): StemName[] { return [...this.stems.keys()]; }
+  isMuted = (s: StemName) => this.muted.has(s);
+  isSoloed = (s: StemName) => this.soloed.has(s);
+
+  toggleMute(s: StemName) {
+    if (!this.muted.delete(s)) this.muted.add(s);
+    this.applyStemGains();
+  }
+
+  toggleSolo(s: StemName) {
+    if (!this.soloed.delete(s)) this.soloed.add(s);
+    this.applyStemGains();
+  }
+
+  /** Original mix when no stem is muted or soloed; otherwise the audible stems summed. */
+  private applyStemGains() {
+    const stemMode = this.stems.size > 0 && (this.muted.size > 0 || this.soloed.size > 0);
+    this.mixGain.gain.value = stemMode ? 0 : 1;
+    for (const [name, s] of this.stems) {
+      const audible = this.soloed.size ? this.soloed.has(name) : !this.muted.has(name);
+      s.gain.gain.value = stemMode && audible ? 1 : 0;
+    }
   }
 
   get duration() { return this.buffer?.duration ?? 0; }
@@ -76,10 +130,17 @@ export class Player {
     this.stopSource();
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
-    src.connect(this.musicGain);
+    src.connect(this.mixGain);
     // Start slightly in the future so the first clicks can be scheduled in time.
     const when = this.ctx.currentTime + 0.05;
     src.start(when, from);
+    this.sources = [...this.stems.values()].map(({ buffer, gain }) => {
+      const s = this.ctx.createBufferSource();
+      s.buffer = buffer;
+      s.connect(gain);
+      if (from < buffer.duration) s.start(when, from);
+      return s;
+    });
     src.onended = () => {
       if (this.source === src) {
         this.playing = false;
@@ -118,6 +179,11 @@ export class Player {
   }
 
   private stopSource() {
+    for (const s of this.sources) {
+      try { s.stop(); } catch { /* not started */ }
+      s.disconnect();
+    }
+    this.sources = [];
     if (this.source) {
       this.source.onended = null;
       try { this.source.stop(); } catch { /* already stopped */ }

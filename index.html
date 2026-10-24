@@ -6,6 +6,8 @@
     <meta name="description" content="Stemlight: auto-timing tracks for xLights. Runs entirely in your browser; your audio never leaves your machine." />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <title>Stemlight</title>
+    <!-- Cross-origin isolation (COOP/COEP) for multi-threaded WASM; GitHub Pages can't set headers. -->
+    <script src="./coi-serviceworker.js"></script>
   </head>
   <body>
     <header class="top">
@@ -24,7 +26,8 @@
           <svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" d="M6 30v-6M12 34V18M18 38V12M24 32v-8M30 36V14M36 30V20M42 28v-4"/></svg>
           <p class="drop-title">Drop a song here</p>
           <p class="muted">or click to choose a file · MP3, WAV, FLAC, OGG, M4A</p>
-          <input id="file-input" type="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac,.opus" hidden />
+          <p class="muted small">Already have stems? Drop them together with the song (files named drums, bass, vocals, other).</p>
+          <input id="file-input" type="file" multiple accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac,.opus" hidden />
         </div>
         <div class="options">
           <label class="field inline">
@@ -34,13 +37,14 @@
               <option value="25">25 ms</option>
             </select>
           </label>
-          <label class="field inline disabled" title="Stem separation arrives in milestone M2.">
-            <input type="checkbox" disabled />
-            <span>Separate stems (drums, bass, vocals, other): coming soon</span>
+          <label class="field inline" title="Runs the HTDemucs model in your browser. Uses the GPU via WebGPU when available.">
+            <input id="opt-separate" type="checkbox" checked />
+            <span>Separate stems (drums, bass, vocals, other) <span class="muted">· 170 MB model, downloaded once</span></span>
           </label>
         </div>
         <p class="muted small center">
-          You get Sections, Phrases, Bars, Beats (1–4), Onsets and Energy rise/drop tracks, ready to import into xLights.
+          You get Sections, Phrases, Bars, Beats (1–4), Onsets and Energy tracks right away. With stems you also get
+          Vocal phrases and syllables, Kick, Snare, Hats, Bass notes and Other accents.
         </p>
       </section>
 
@@ -69,9 +73,15 @@
           <span class="sep"></span>
           <label class="vol" title="Song volume">Song <input id="music-vol" type="range" min="0" max="1" step="0.05" value="1" /></label>
           <label class="vol" title="Audition click volume">Clicks <input id="click-vol" type="range" min="0" max="1.5" step="0.05" value="1" /></label>
+          <span id="stem-strip" class="stem-strip" hidden></span>
           <span class="spacer"></span>
           <span class="file-info"><strong id="file-name"></strong> <span id="file-meta" class="muted"></span></span>
           <button id="new-file" class="btn small">New song</button>
+        </div>
+        <div id="stem-status" class="stem-status" role="status" hidden>
+          <span id="stem-status-text"></span>
+          <progress id="stem-progress" max="1" value="0" hidden></progress>
+          <button id="stem-cancel" class="btn small" hidden>Cancel</button>
         </div>
         <p class="hint muted small">Scroll to pan, Ctrl/⌘ + scroll to zoom, click to seek. Turn on <span class="kbd">🎧</span> on a track to hear clicks on its marks while playing.</p>
 

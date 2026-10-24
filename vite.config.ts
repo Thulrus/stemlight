@@ -20,9 +20,17 @@ function thirdPartyLicenses(): Plugin {
 }
 
 // Relative base so the build works at any GitHub Pages path (/stemlight/).
+// Cross-origin isolation enables multi-threaded WASM. On GitHub Pages public/coi-serviceworker.js
+// adds these headers; locally the dev and preview servers send them directly.
+const isolation = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
+
 export default defineConfig({
   base: process.env.STEMLIGHT_BASE ?? './',
+  server: { headers: isolation },
+  preview: { headers: isolation },
+  optimizeDeps: { exclude: ['onnxruntime-web'] },
   plugins: [thirdPartyLicenses()],
   worker: { format: 'es' },
-  test: { include: ['tests/**/*.test.ts'], testTimeout: 120_000 },
+  // Dev tools in tools/ are vitest files too, but only run on request (STEMLIGHT_TOOLS=1).
+  test: { include: [process.env.STEMLIGHT_TOOLS ? 'tools/**/*.test.ts' : 'tests/**/*.test.ts'], testTimeout: 120_000 },
 });

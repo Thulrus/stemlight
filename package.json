@@ -5,20 +5,26 @@
   "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
-  "repository": { "type": "git", "url": "https://github.com/Thulrus/stemlight.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Thulrus/stemlight.git"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "eval": "vitest run tests/eval.test.ts"
+    "eval": "vitest run tests/eval.test.ts",
+    "tool:separate": "STEMLIGHT_TOOLS=1 vitest run tools/separate-songs.test.ts --disableConsoleIntercept"
   },
   "dependencies": {
-    "fflate": "^0.8.3"
+    "fflate": "^0.8.3",
+    "onnxruntime-web": "^1.30.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "onnxruntime-node": "^1.30.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
