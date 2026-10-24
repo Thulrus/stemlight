@@ -1,91 +1,90 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_STEM_PARAMS, stemTracks } from '../src/analysis/stems';
+import { analyzeRhythm } from '../src/analysis/analyze';
+import { buildTracks, DEFAULT_BUILD_PARAMS, type BuildInputs, type BuildParams } from '../src/analysis/build';
+import { applyVocalPrior } from '../src/align/acoustic';
+import { greedySyllables } from '../src/align/greedy';
 import type { Track } from '../src/core/types';
 import { computeFeatures, type Features } from '../src/dsp/features';
-import { BENCH_CASES } from '../src/eval/bench';
+import { BENCH_CASES, scoreCase } from '../src/eval/bench';
 import { STEM_NAMES, type StemName } from '../src/separation/htdemucs';
+import { ALIGNER_VOCAB } from '../src/separation/model';
 import { readWav16, STEMS_DIR } from './audio';
 import { readEmissions } from './emissions';
-import { greedySyllables } from '../src/align/greedy';
-import { ctcSyllableTrack } from '../src/analysis/lyricTracks';
-import { ALIGNER_VOCAB } from '../src/separation/model';
-import { alignWords } from '../src/align/align';
-import { applyVocalPrior } from '../src/align/acoustic';
-import { parsePronDict } from '../src/align/pron';
-import { parseLyrics } from '../src/align/text';
-import { lyricTracks, wordsFromAsr } from '../src/analysis/lyricTracks';
-import { parseTimingTracks } from '../src/core/parseXTiming';
-import { gunzipSync } from 'node:zlib';
+import { cachedPitch } from './pitch';
 
-const dict = parsePronDict(gunzipSync(readFileSync(new URL('../public/cmudict.txt.gz', import.meta.url))).toString('utf8'));
 /**
- * Lyrics for SYL=lyrics: Candy Girl's hand-typed lyric track (real lyrics), else Whisper's cached
- * transcript of the song (words + time hints).
+ * Benchmark configuration, mirroring the app's options:
+ *   VOCALS=vocals_hq   high-quality vocals (Mel-Band RoFormer) instead of HTDemucs's
+ *   LEAD=1             lead/backing separation
+ *   SYL=none           no character model (syllables from vocal attacks)
+ *   P='{"vocals":{…}}' parameter overrides
  */
-function benchLyrics(song: string) {
-  if (/Candy Girl/.test(song)) {
-    const xsq = readFileSync(new URL('../fixtures/CandyGirl.xsq', import.meta.url), 'utf8');
-    const lines = parseTimingTracks(xsq).find((t) => t.name === 'New Timing')!.marks.map((m) => m.label ?? '');
-    return { words: parseLyrics(lines.join('\n')), hints: undefined };
-  }
-  const f = `${STEMS_DIR}${song}/whisper-whisper-small_timestamped-vocals_hq.json`;
-  if (!existsSync(f)) return undefined;
-  const out = JSON.parse(readFileSync(f, 'utf8')) as { chunks: { text: string; timestamp: [number, number | null] }[] };
-  return wordsFromAsr(out.chunks.map((c) => ({ text: c.text, start: c.timestamp[0], end: c.timestamp[1] })));
-}
+const VOCALS = process.env.VOCALS ?? 'vocals';
+const LEAD = process.env.LEAD === '1';
+const SYL = process.env.SYL ?? 'ctc';
 
-const available = BENCH_CASES.filter((c) => existsSync(`${STEMS_DIR}${c.song}/vocals.wav`));
+export const benchParams = (): BuildParams => {
+  const base: BuildParams = structuredClone(DEFAULT_BUILD_PARAMS);
+  const over = JSON.parse(process.env.P ?? '{}') as Record<string, Record<string, number>>;
+  for (const [k, v] of Object.entries(over)) Object.assign((base as unknown as Record<string, object>)[k], v);
+  return base;
+};
 
-/** Stem tracks for one cached song; the mix is the sum of the stems (they reconstruct it at ~30 dB SNR). */
-export function analyzeCachedSong(song: string): Record<string, Track> {
-  const feats: Partial<Record<StemName, Features>> = {};
+const available = BENCH_CASES.filter((c) => existsSync(`${STEMS_DIR}${c.song}/drums.wav`) && existsSync(`${STEMS_DIR}${c.song}/${VOCALS}.wav`));
+
+/** The app's tracks for one cached song; the mix is the sum of the stems (they reconstruct it at ~30 dB SNR). */
+export async function analyzeCachedSong(song: string, params = benchParams()): Promise<Track[]> {
+  const dir = `${STEMS_DIR}${song}/`;
+  const stems: Partial<Record<StemName, Features>> = {};
   const samples: Partial<Record<StemName, Float32Array>> = {};
-  let sr = 22050;
-  // VOCALS=vocals_hq benchmarks the Mel-Band RoFormer vocals in place of HTDemucs's.
-  const vocalsFile = process.env.VOCALS ?? 'vocals';
   for (const n of STEM_NAMES) {
-    const file = n === 'vocals' && existsSync(`${STEMS_DIR}${song}/${vocalsFile}.wav`) ? vocalsFile : n;
-    const w = readWav16(`${STEMS_DIR}${song}/${file}.wav`);
-    sr = w.sr;
+    const w = readWav16(dir + (n === 'vocals' ? VOCALS : n) + '.wav');
     samples[n] = w.samples;
-    feats[n] = computeFeatures(w.samples, sr);
+    stems[n] = computeFeatures(w.samples, w.sr);
   }
-  const mix = new Float32Array(samples.vocals!.length);
-  for (const n of STEM_NAMES) samples[n]!.forEach((v, i) => (mix[i] += v));
-  const mixFeats = computeFeatures(mix, sr);
-  const tracks = Object.fromEntries(stemTracks(feats, samples, DEFAULT_STEM_PARAMS, mixFeats).map((t) => [t.name, t]));
-  // SYL=ctc: syllables from the character model's greedy decoding (emissions cached by tools/emissions).
-  const em = process.env.SYL === 'ctc' ? readEmissions(song, vocalsFile) : undefined;
-  const lyr = process.env.SYL === 'lyrics' ? benchLyrics(song) : undefined;
-  const lem = lyr ? readEmissions(song, vocalsFile) : undefined;
-  if (lyr && lem) {
-    const f = feats.vocals!;
-    const db = Float32Array.from({ length: lem.frames }, (_, t) => 20 * Math.log10(f.rmsShort[Math.min(f.nFrames - 1, Math.round((lem.offsetSec + t * lem.frameSec) * f.fps))] + 1e-9));
-    const aligned = alignWords(applyVocalPrior(lem, db, 0), ALIGNER_VOCAB, lyr.words, { hints: lyr.hints, dict });
-    const p = { ...DEFAULT_STEM_PARAMS.lyrics, offsetMs: Number(process.env.OFFSET ?? DEFAULT_STEM_PARAMS.lyrics.offsetMs) };
-    for (const t of lyricTracks(aligned, f, p)) tracks[t.name] = t;
+  const mixAudio = new Float32Array(samples.drums!.length);
+  for (const n of STEM_NAMES) samples[n]!.forEach((v, i) => (mixAudio[i] += v));
+  const mix = computeFeatures(mixAudio, 22050);
+  const inp: BuildInputs = { mix, rhythm: analyzeRhythm(mix, params.beats), stems, samples, pitch: {} };
+  inp.pitch.vocals = await cachedPitch(song, VOCALS);
+  inp.pitch.other = await cachedPitch(song, 'other');
+  const syl = (stem: string, f: Features) => {
+    const em = readEmissions(song, stem);
+    if (!em) return undefined;
+    const db = Float32Array.from({ length: em.frames }, (_, t) => 20 * Math.log10(f.rmsShort[Math.min(f.nFrames - 1, Math.round((em.offsetSec + t * em.frameSec) * f.fps))] + 1e-9));
+    return greedySyllables(applyVocalPrior(em, db, ALIGNER_VOCAB['<pad>']), ALIGNER_VOCAB).map((x) => x.start);
+  };
+  if (SYL === 'ctc') inp.syllables = syl(VOCALS, stems.vocals!);
+  if (LEAD && existsSync(dir + 'lead.wav')) {
+    const lead = readWav16(dir + 'lead.wav').samples;
+    const backing = Float32Array.from(samples.vocals!, (v, i) => v - (lead[i] ?? 0));
+    inp.lead = computeFeatures(lead, 22050);
+    inp.backing = computeFeatures(backing, 22050);
+    if (SYL === 'ctc') inp.leadSyllables = syl('lead', inp.lead);
+    inp.pitch.backing = await cachedPitch(song, VOCALS === 'vocals_hq' ? 'backing' : 'backing-htdemucs', backing);
   }
-  if (em) tracks['Vocal syllables'] = ctcSyllableTrack(greedySyllables(em, ALIGNER_VOCAB).map((x) => x.start), feats.vocals);
-  return tracks;
+  return buildTracks(inp, params);
 }
 
-describe.skipIf(available.length === 0)('benchmark: stem tracks vs hand-made sequences', () => {
-  it('scores every available case', () => {
+describe.skipIf(available.length === 0)('benchmark: tracks vs hand-made sequences', () => {
+  it('scores every available case', async () => {
     const all: number[] = [];
-    const vocal: number[] = [];
-    const rows: string[] = [];
+    const rows: string[] = [`config: VOCALS=${VOCALS} LEAD=${LEAD ? 1 : 0} SYL=${SYL}`];
     for (const c of available) {
       const xsq = readFileSync(new URL(`../fixtures/${c.xsq}.xsq`, import.meta.url), 'utf8');
-      const scores = c.score(xsq, analyzeCachedSong(c.song));
-      for (const [k, v] of Object.entries(scores)) {
-        rows.push(`  ${c.id.padEnd(16)} ${k.padEnd(32)} ${v.toFixed(3)}`);
-        all.push(v);
-        if (/syllable|phrase/.test(k)) vocal.push(v);
+      const tracks = await analyzeCachedSong(c.song);
+      const scores = scoreCase(c, xsq, tracks);
+      if (process.env.DUMP) writeFileSync(`${process.env.DUMP}/${c.xsq}.json`, JSON.stringify(Object.fromEntries(tracks.map((t) => [t.name, t.marks]))));
+      const caseMean = scores.reduce((a, s) => a + s.f, 0) / scores.length;
+      for (const s of scores) {
+        rows.push(`  ${c.id.padEnd(16)} ${s.label.padEnd(18)} ${s.f.toFixed(3)}  P ${s.precision.toFixed(2)} R ${s.recall.toFixed(2)}  ${String(s.est).padStart(4)}/${String(s.ref).padEnd(4)} ${s.track}`);
       }
+      all.push(caseMean);
     }
-    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-    console.log([...rows, `  ${'MEAN (vocal)'.padEnd(49)} ${mean(vocal).toFixed(3)}`, `  ${'MEAN (all)'.padEnd(49)} ${mean(all).toFixed(3)}`].join('\n'));
-    expect(mean(all)).toBeGreaterThan(0.4);
-  });
+    const mean = all.reduce((a, b) => a + b, 0) / all.length;
+    rows.push(`  ${'MEAN (per song)'.padEnd(35)} ${mean.toFixed(3)}`);
+    console.log(rows.join('\n'));
+    expect(mean).toBeGreaterThan(0.3);
+  }, 600_000);
 });

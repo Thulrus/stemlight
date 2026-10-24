@@ -1,12 +1,13 @@
-import { DEFAULT_PARAMS } from '../analysis/analyze';
+import { DEFAULT_BUILD_PARAMS } from '../analysis/build';
 import type { AllParams, FromWorker, StemAudio, ToWorker } from '../analysis/protocol';
-import { DEFAULT_STEM_PARAMS } from '../analysis/stems';
+import type { PitchSource } from '../analysis/build';
 import { computePeaks, decodeFile, decodeMono, resample, stemFromFileName, toStereo } from '../audio/decode';
 import { Player } from '../audio/player';
 import { quantizeMarks, type MsMark } from '../core/quantize';
 import type { GridMs, Track } from '../core/types';
 import { ANALYSIS_SR } from '../dsp/features';
 import { fileSafeName, toXTiming } from '../export/xtiming';
+import { channelOf, hasPitch, splitTrack, type Split } from '../core/split';
 import { SAMPLE_RATE as SEPARATOR_SR, STEM_NAMES, type StemName } from '../separation/htdemucs';
 import type { FromSeparator, ToSeparator } from '../separation/protocol';
 import { hashBytes, idbDelete, idbGet, idbKeys, idbPut } from '../storage/idb';
@@ -36,21 +37,28 @@ function eta(since: number, done: number, total: number) {
 }
 /** Saved per-song results (stems, vocals, lyrics, vocal timing); models are stored as "model:…". */
 const songCacheKeys = async () => (await idbKeys()).filter((k) => !k.startsWith('model:'));
-const defaultParams = (): AllParams => structuredClone({ ...DEFAULT_PARAMS, ...DEFAULT_STEM_PARAMS });
+const defaultParams = (): AllParams => structuredClone(DEFAULT_BUILD_PARAMS);
 const STEM_LABEL: Record<StemName, string> = { drums: 'Drums', bass: 'Bass', vocals: 'Vocals', other: 'Other' };
 /** Bump a kind's version when its output changes, so stale cached results aren't reused. */
 /** Step detail for a result loaded from an earlier run of the same song. */
 const REUSED = 'reused from an earlier run';
 const CACHE_VERSION = { stems: 1, 'vocals-hq': 1, lead: 1, lyrics: 2, emissions: 2 } as const;
 
-/** Which parameter group feeds each generated track. */
-const PARAM_GROUP: Record<string, keyof AllParams> = {
-  'mix-beats': 'beats', 'mix-bars': 'beats', 'mix-onsets': 'onsets',
-  'mix-sections': 'sections', 'mix-phrases': 'phrases', 'mix-energy': 'energy',
-  'drums-kick': 'kick', 'drums-snare': 'snare', 'drums-hats': 'hats', 'bass-notes': 'bassNotes',
-  'vocals-phrases': 'vocalPhrases', 'vocals-syllables': 'vocalSyllables', 'other-accents': 'otherAccents',
-  'other-lead': 'otherNotes', 'other-notes': 'otherNotes', 'vocals-notes': 'otherNotes', 'vocals-backing': 'vocalPhrases', 'vocals-lyric-lines': 'lyrics', 'vocals-lyric-words': 'lyrics',
-  'vocals-lyric-syllables': 'lyrics', 'vocals-lyrics': 'lyrics',
+/** Which parameter groups feed each generated track (shown in this order in the inspector). */
+const PARAM_GROUPS: Record<string, (keyof AllParams)[]> = {
+  'mix-beats': ['beats'], 'mix-bars': ['beats'], 'mix-sections': ['sections'], 'mix-phrases': ['phrases'],
+  'drums-kick': ['kick'], 'drums-snare': ['snare'], 'drums-hats': ['hats'], 'bass-notes': ['bassNotes', 'snap'],
+  'vocals-phrases': ['vocals'], 'vocals-syllables': ['vocals', 'snap'], 'vocals-notes': ['melody', 'vocals', 'snap'],
+  'vocals-backing': ['vocals', 'melody'], 'vocals-backing-notes': ['melody', 'snap'], 'other-melody': ['melody', 'snap'],
+  'vocals-lyric-lines': ['lyrics'], 'vocals-lyric-words': ['lyrics', 'snap'], 'vocals-lyric-syllables': ['lyrics', 'snap'], 'vocals-lyrics': ['lyrics'],
+};
+/** Inspector headings for groups shared by several tracks. */
+const GROUP_TITLE: Partial<Record<keyof AllParams, string>> = {
+  vocals: 'Singing (shared by the vocal tracks)',
+  melody: 'Notes (shared by the note tracks)',
+  snap: 'Snap to beats (shared)',
+  lyrics: 'Lyric timing (shared)',
+  beats: 'Beats and Bars',
 };
 
 type Range = { label: string; min: number; max: number; step: number; hint: string };
@@ -70,16 +78,24 @@ const PARAM_RANGES: Record<keyof AllParams, Record<string, Range>> = {
     mergeGap: { label: 'Breath gap (s)', min: 0.05, max: 1.5, step: 0.05, hint: 'Pauses shorter than this don’t end a phrase.' },
     minDur: { label: 'Shortest phrase (s)', min: 0.1, max: 3, step: 0.05, hint: 'Shorter phrases are dropped.' },
   },
-  vocalSyllables: {
-    thresholdDb: { label: 'Range (dB)', min: 6, max: 40, step: 1, hint: 'Higher counts quieter syllables.' },
-    sensitivity: sensitivity('Higher splits words into more syllables.'),
-    minDur: { label: 'Shortest syllable (s)', min: 0.05, max: 0.5, step: 0.01, hint: 'Syllables shorter than this are merged.' },
+  vocals: {
+    rangeDb: { label: 'Range (dB)', min: 10, max: 45, step: 1, hint: 'How far below the loudest singing a voice still counts; higher catches quieter singing (and more bleed).' },
+    decayDb: { label: 'Release (dB)', min: 6, max: 30, step: 1, hint: 'A syllable ends when the voice fades this far below its peak; higher holds longer.' },
+    legato: { label: 'Join gap (s)', min: 0, max: 0.6, step: 0.01, hint: 'Gaps shorter than this between syllables or notes are closed, so a smooth line reads as touching marks.' },
+    minDur: { label: 'Shortest (s)', min: 0.03, max: 0.4, step: 0.01, hint: 'Syllables and notes shorter than this are merged into their neighbours.' },
+    breath: { label: 'Phrase break (s)', min: 0.1, max: 2, step: 0.05, hint: 'A pause in the singing at least this long ends a phrase.' },
+    maxHold: { label: 'Longest hold (s)', min: 0.5, max: 8, step: 0.1, hint: 'How long a syllable may last when nothing follows it.' },
   },
-  otherAccents: { sensitivity: sensitivity('Higher finds more, softer accents in guitars, keys, strings and horns.'), minGap },
-  otherNotes: {
-    onsetThresh: { label: 'Onset threshold', min: 0.1, max: 0.9, step: 0.05, hint: 'Lower finds more, softer note starts.' },
-    frameThresh: { label: 'Sustain threshold', min: 0.1, max: 0.9, step: 0.05, hint: 'Lower lets notes ring longer.' },
-    minNote: { label: 'Shortest note (s)', min: 0.03, max: 0.5, step: 0.01, hint: 'Shorter notes are dropped.' },
+  melody: {
+    voicing: { label: 'Note threshold', min: 0.1, max: 0.8, step: 0.05, hint: 'How sure the note model must be that a note sounds; lower finds quieter notes (and more stray ones).' },
+    changeCost: { label: 'Steadiness', min: 0, max: 10, step: 0.5, hint: 'Higher ignores vibrato, slides and blips; lower follows every change of note.' },
+    minNote: { label: 'Shortest note (s)', min: 0.03, max: 0.4, step: 0.01, hint: 'Shorter pitch changes stay part of the note around them.' },
+    reattack: { label: 'Re-sung note', min: 0.3, max: 1, step: 0.05, hint: 'Lower splits a held pitch more readily where it is sung or played again.' },
+    legato: { label: 'Join gap (s)', min: 0, max: 0.6, step: 0.01, hint: 'Gaps shorter than this between notes are closed.' },
+  },
+  snap: {
+    division: { label: 'Grid (steps per beat)', min: 0, max: 4, step: 1, hint: '0 = off. 1 snaps to beats, 2 to half beats, 4 to quarter beats.' },
+    tolerance: { label: 'Snap distance (s)', min: 0.02, max: 0.2, step: 0.01, hint: 'Only marks this close to a grid line move onto it.' },
   },
   lyrics: {
     offsetMs: { label: 'Offset (ms)', min: -200, max: 200, step: 10, hint: 'Shifts every word, syllable and phoneme start earlier (−) or later (+).' },
@@ -90,10 +106,6 @@ const PARAM_RANGES: Record<keyof AllParams, Record<string, Range>> = {
     priorBpm: { label: 'Tempo guess (BPM)', min: 60, max: 200, step: 1, hint: 'Biases the tempo search; change it if beats are double or half speed.' },
     tightness: { label: 'Tightness', min: 20, max: 400, step: 10, hint: 'Higher keeps beats evenly spaced; lower follows the music more loosely.' },
   },
-  onsets: {
-    sensitivity: { label: 'Sensitivity', min: 0, max: 1, step: 0.05, hint: 'Higher finds more, softer hits.' },
-    minGap: { label: 'Min gap (s)', min: 0.03, max: 0.5, step: 0.01, hint: 'Hits closer than this are merged.' },
-  },
   sections: {
     sensitivity: { label: 'Sensitivity', min: 0, max: 1, step: 0.05, hint: 'Higher splits the song into more sections.' },
     minBars: { label: 'Min length (bars)', min: 2, max: 16, step: 1, hint: 'Shortest allowed section.' },
@@ -103,17 +115,17 @@ const PARAM_RANGES: Record<keyof AllParams, Record<string, Range>> = {
     sensitivity: { label: 'Sensitivity', min: 0, max: 1, step: 0.05, hint: 'Higher finds more phrase breaks.' },
     minBars: { label: 'Min length (bars)', min: 1, max: 8, step: 1, hint: 'Shortest allowed phrase.' },
   },
-  energy: {
-    thresholdDb: { label: 'Threshold (dB)', min: 1, max: 12, step: 0.5, hint: 'Loudness change needed to mark a rise or drop.' },
-    spanBars: { label: 'Window (bars)', min: 1, max: 8, step: 1, hint: 'Bars compared before and after each point.' },
-  },
 };
 
 /** A stage of processing a song, shown in the status panel. */
 type StepId = 'mix' | 'stems' | 'notes' | 'hq' | 'lead' | 'lyrics' | 'align' | 'tracks';
 type Step = { id: StepId; label: string; state: 'pending' | 'active' | 'done' | 'skipped' | 'failed'; detail?: string; note?: string; fraction?: number };
 
-type TrackState = { track: Track; include: boolean; nudgeMs: number; hue: number; userName?: string };
+type TrackState = {
+  track: Track; include: boolean; nudgeMs: number; hue: number; userName?: string;
+  /** Exported as several tracks, one per prop sharing the part (see core/split). */
+  split?: Split;
+};
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
@@ -465,9 +477,9 @@ export class App {
       const pasted = !!this.lyricsText;
       const transcribe = !pasted && this.optOn('lyrics');
       steps.push(['stems', supplied.size ? 'Your stem files' : 'Stem separation (drums, bass, vocals, other)']);
-      steps.push(['notes', 'Notes and vocal melody']);
       if (this.optOn('hqVocals') && !ownVocals) steps.push(['hq', 'High-quality vocals']);
       if (this.optOn('lead') && !ownVocals) steps.push(['lead', 'Lead and backing vocals']);
+      steps.push(['notes', 'Notes and melodies']);
       if (transcribe) steps.push(['lyrics', 'Lyrics transcription']);
       if (pasted || transcribe || this.optOn('align')) steps.push(['align', pasted || transcribe ? 'Lyric alignment' : 'Precise vocal syllables']);
       steps.push(['tracks', 'Final tracks']);
@@ -542,18 +554,6 @@ export class App {
       this.useStems(stems);
       step('stems', { state: 'done' });
 
-      // Notes in guitars, keys and the like, and the sung melody (Basic Pitch, small and quick
-      // even on the CPU).
-      current = 'notes';
-      step('notes', { state: 'active' });
-      for (const stem of ['other', 'vocals'] as const) {
-        const audio = stems[stem];
-        if (!audio) continue;
-        const m = await this.separatorJob({ type: 'notes', audio: audio.slice() }, 'notes', stem === 'other' ? 'instrument notes' : 'vocal melody', live);
-        if (!live()) return;
-        if (m.type === 'notes') this.send({ type: 'pitch', stem, frames: m.frames, params: this.params }, [m.frames.note.buffer, m.frames.onset.buffer, m.frames.times.buffer]);
-      }
-      step('notes', stems.other || stems.vocals ? { state: 'done' } : { state: 'skipped', detail: 'no vocals or other stem' });
       let vocals = stems.vocals;
       let vocalsVariant = 'htdemucs';
       /** The lead singer alone, when separated: aligned together with the full vocals. */
@@ -624,6 +624,23 @@ export class App {
           step('lead', { state: 'done', detail: cached ? REUSED : undefined });
         }
       }
+
+      // Notes (Basic Pitch, small and quick even on the CPU): the instruments' line, the sung
+      // melody in the final vocals (after high-quality vocals), and the backing vocals.
+      current = 'notes';
+      step('notes', { state: 'active' });
+      const noteSources: [PitchSource, Float32Array | undefined, string][] = [
+        ['other', stems.other, 'instrument notes'],
+        ['vocals', vocals, 'vocal melody'],
+        ['backing', leadVocals && vocals ? Float32Array.from(vocals, (v, i) => v - (leadVocals![i] ?? 0)) : undefined, 'backing vocal notes'],
+      ];
+      for (const [src, audio, what] of noteSources) {
+        if (!audio) continue;
+        const m = await this.separatorJob({ type: 'notes', audio: audio.slice() }, 'notes', what, live);
+        if (!live()) return;
+        if (m.type === 'notes') this.send({ type: 'pitch', stem: src, frames: m.frames, params: this.params }, [m.frames.note.buffer, m.frames.onset.buffer, m.frames.times.buffer]);
+      }
+      step('notes', stems.other || vocals ? { state: 'done' } : { state: 'skipped', detail: 'no vocals or other stem' });
 
       // The separation models hold several hundred MB; free them before Whisper loads.
       // (They reload from the IndexedDB cache in seconds for the next song.)
@@ -1157,7 +1174,13 @@ export class App {
       // Back-to-back spans (beats, bars, sections) would just stay lit; flash at each boundary instead.
       const touching = marks.filter((m, j) => j > 0 && m.start === marks[j - 1].end).length;
       const isPoint = (durs[durs.length >> 1] ?? 0) <= this.gridMs * 1.5 || touching > 0.8 * (marks.length - 1);
-      return [{ id: s.track.id, name: s.track.name, hue: s.hue, marks, isPoint }];
+      if (!s.split) return [{ id: s.track.id, name: s.track.name, hue: s.hue, marks, isPoint }];
+      // A split track lights one lamp per prop; touching marks no longer touch within a channel.
+      const ch = channelOf(marks, s.split);
+      return Array.from({ length: s.split.channels }, (_, c) => ({
+        id: `${s.track.id}#${c + 1}`, name: `${s.track.name} ${c + 1}`, hue: (s.hue + c * 40) % 360,
+        marks: marks.filter((_, j) => ch[j] === c), isPoint: (durs[durs.length >> 1] ?? 0) <= this.gridMs * 1.5,
+      }));
     }));
     this.timeline.render();
     this.renderHeads();
@@ -1195,7 +1218,7 @@ export class App {
         el('span', { class: 'swatch' }),
         el('span', { class: 'lane-name', title: `${s.track.name} (from ${s.track.source})` }, s.track.name),
         el('span', { class: `lane-src src-${s.track.source}` }, s.track.source === 'mix' ? '' : s.track.source),
-        el('span', { class: 'lane-count' }, String(s.track.marks.length)),
+        el('span', { class: 'lane-count', title: s.split ? `Split into ${s.split.channels} props` : `${s.track.marks.length} marks` }, s.split ? `×${s.split.channels}` : String(s.track.marks.length)),
         audition,
       );
       row.style.height = `${LANE_H}px`;
@@ -1235,9 +1258,11 @@ export class App {
       Object.assign(el('button', { class: 'btn small' }, `+${this.gridMs} ms`), { onclick: () => nudge(1) }),
     );
 
-    const group = PARAM_GROUP[s.track.id];
-    const sliders = group ? Object.entries(PARAM_RANGES[group]).map(([key, r]) => this.slider(group, key, r)) : [];
-    const shared = group === 'beats' ? el('p', { class: 'muted small' }, 'Beats and Bars share these settings.') : '';
+    const groups = PARAM_GROUPS[s.track.id.split('~')[0]] ?? [];
+    const sliders = s.track.id.includes('~') ? [] : groups.flatMap((g) => {
+      const title = groups.length > 1 || GROUP_TITLE[g] ? el('h4', { class: 'group-title' }, GROUP_TITLE[g] ?? '') : '';
+      return [title, ...Object.entries(PARAM_RANGES[g]).map(([key, r]) => this.slider(g, key, r))];
+    });
 
     const dup = el('button', { class: 'btn' }, 'Duplicate');
     dup.onclick = () => {
@@ -1258,10 +1283,37 @@ export class App {
     box.replaceChildren(
       el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Name'), name),
       el('p', { class: 'muted small' }, `${s.track.marks.length} marks · from ${s.track.source}${s.track.id.includes('~') ? ' (copy, fixed)' : ''}`),
+      this.splitRow(s),
       ...sliders,
-      shared,
       nudgeRow,
       el('div', { class: 'row actions' }, dup, del),
+    );
+  }
+
+  /** Share the track among several props: export it as one track per channel. */
+  private splitRow(s: TrackState) {
+    const n = s.split?.channels ?? 1;
+    const count = el('select', { class: 'select' }, ...[1, 2, 3, 4, 5, 6].map((k) => el('option', { value: String(k), selected: k === n }, k === 1 ? 'No' : `${k} channels`)));
+    count.setAttribute('aria-label', 'Split into channels');
+    const pitchOk = hasPitch(s.track);
+    const by = el('select', { class: 'select' },
+      el('option', { value: 'turns', selected: s.split?.by !== 'pitch' }, 'taking turns'),
+      ...(pitchOk ? [el('option', { value: 'pitch', selected: s.split?.by === 'pitch' }, 'by pitch, low to high')] : []));
+    by.setAttribute('aria-label', 'How to split');
+    by.hidden = n === 1;
+    const update = () => {
+      const k = Number(count.value);
+      s.split = k > 1 ? { channels: k, by: by.value as Split['by'] } : undefined;
+      this.refresh();
+    };
+    count.addEventListener('change', update);
+    by.addEventListener('change', update);
+    return el('div', { class: 'field' },
+      el('span', { class: 'field-label' }, 'Split into props'),
+      el('div', { class: 'row' }, count, by),
+      el('span', { class: 'muted small' }, n > 1
+        ? `Exported as ${n} tracks, “${s.track.name} 1” to “${s.track.name} ${n}”, one per prop.${s.split?.by === 'pitch' ? '' : s.track.id === 'mix-beats' ? ' Beats alternate by beat number when the bars are regular.' : ''}`
+        : 'Share this track among several props, e.g. alternate beats between two pumpkins, or low and high notes.'),
     );
   }
 
@@ -1290,13 +1342,15 @@ export class App {
     return this.tracks.filter((s) => s.include).map((s) => {
       const shift = s.nudgeMs / 1000;
       const move = (marks: Track['marks']) => marks.map((m) => ({ ...m, start: m.start + shift, end: m.end + shift }));
-      return shift ? { ...s.track, marks: move(s.track.marks), layers: s.track.layers?.map(move) } : s.track;
-    });
+      const t = shift ? { ...s.track, marks: move(s.track.marks), layers: s.track.layers?.map(move) } : s.track;
+      return s.split ? splitTrack(t, s.split) : [t];
+    }).flat();
   }
 
   private renderExport() {
     const n = this.tracks.filter((s) => s.include).length;
-    $('#export-count').textContent = `${n} of ${this.tracks.length} tracks selected`;
+    const files = this.tracks.filter((s) => s.include).reduce((a, s) => a + (s.split?.channels ?? 1), 0);
+    $('#export-count').textContent = `${n} of ${this.tracks.length} tracks selected${files > n ? ` (${files} after splitting)` : ''}`;
     for (const id of ['#export-xtiming', '#export-zip']) $<HTMLButtonElement>(id).disabled = n === 0;
   }
 

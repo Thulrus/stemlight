@@ -28,7 +28,7 @@ export async function transcribeVocals(
     if (cancelled?.()) throw new Error('cancelled');
     const w = windows[i];
     const out = await asr(audio.subarray(Math.round(w.start * ASR_SR), Math.min(audio.length, Math.round(w.end * ASR_SR))));
-    for (const c of out.chunks ?? []) {
+    for (const c of dropFiller(out.chunks ?? [])) {
       const start = w.start + c.timestamp[0];
       if (start < w.keepFrom || start >= w.keepTo) continue;
       words.push({ text: c.text, start, end: c.timestamp[1] === null ? null : w.start + c.timestamp[1] });
@@ -36,4 +36,28 @@ export async function transcribeVocals(
     onProgress?.(i + 1, windows.length);
   }
   return words;
+}
+
+/**
+ * Whisper's stock filler, which it writes when it can't make out words (music without
+ * singing, or singing in another language): a sentence that is only one of these is dropped.
+ */
+const FILLER = new Set(['music', 'thank you', 'thanks for watching', 'thank you for watching', 'you', 'bye', 'applause', 'laughter', 'silence', 'subtitles by the amaraorg community']);
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** Word chunks without sentences that are only filler (see FILLER). */
+export function dropFiller<T extends { text: string }>(chunks: T[]): T[] {
+  const out: T[] = [];
+  let sentence: T[] = [];
+  const flush = () => {
+    if (!FILLER.has(norm(sentence.map((c) => c.text).join(' ')))) out.push(...sentence);
+    sentence = [];
+  };
+  for (const c of chunks) {
+    if (/[♪[\]()]/.test(c.text)) continue; // "[Music]", "♪"
+    sentence.push(c);
+    if (/[.!?]\s*$/.test(c.text)) flush();
+  }
+  flush();
+  return out;
 }

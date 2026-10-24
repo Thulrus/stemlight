@@ -17,7 +17,7 @@ import { cachedEmissions, load16k } from '../tests/emissions';
 import { matchWords, scoreOnsets } from '../src/eval/align';
 import { wordsFromAsr } from '../src/analysis/lyricTracks';
 import { alignLyrics, type AsrWord } from '../src/analysis/lyrics';
-import { DEFAULT_STEM_PARAMS, vocalTracks } from '../src/analysis/stems';
+import { attackOnsets, DEFAULT_VOCAL_PARAMS, phrasesFrom, syllableSpans } from '../src/analysis/vocals';
 import { computeFeatures } from '../src/dsp/features';
 import { readWav16 } from '../tests/audio';
 
@@ -65,8 +65,9 @@ it('aligns JamendoLyrics', async () => {
       if (SRC === 'whisper-raw') times = hints.map((h) => h!.start);
       else if (SRC === 'whisper-old') {
         const w = readWav16(`${STEMS_DIR}${song}/${stems[0]}.wav`);
-        const vt = vocalTracks(computeFeatures(w.samples, w.sr), DEFAULT_STEM_PARAMS);
-        const old = alignLyrics(asr, vt[0].marks, vt[1].marks).words.marks;
+        const vf = computeFeatures(w.samples, w.sr);
+        const syl = syllableSpans(attackOnsets(vf), vf);
+        const old = alignLyrics(asr, phrasesFrom(syl, DEFAULT_VOCAL_PARAMS.breath), syl).words.marks;
         // alignLyrics drops some words; match its own labels instead.
         const pairs = matchWords(old.map((m) => normWord(m.label ?? '')), words.map((x) => x.norm));
         est = words.map(() => NaN);

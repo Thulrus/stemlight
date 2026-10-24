@@ -1,4 +1,4 @@
-// Dev tool: how well the lyric-free syllable detector (vocalTracks) finds syllables, on
+// Dev tool: how well the lyric-free syllable detector (attackOnsets) finds syllables, on
 // JamendoLyrics. Reference syllable onsets come from aligning the dataset's lyrics to the same
 // vocals (word onsets within ~50 ms of the human annotation; see tools/align-eval). Needs the
 // emissions cached by align-eval for the stem.
@@ -10,7 +10,7 @@ import { alignWords, type CharVocab } from '../src/align/align';
 import { greedySyllables } from '../src/align/greedy';
 import { parsePronDict } from '../src/align/pron';
 import { parseLyrics } from '../src/align/text';
-import { DEFAULT_STEM_PARAMS, vocalTracks } from '../src/analysis/stems';
+import { attackOnsets } from '../src/analysis/vocals';
 import { computeFeatures } from '../src/dsp/features';
 import { eventF } from '../src/eval/metrics';
 import { readWav16, STEMS_DIR } from '../tests/audio';
@@ -38,7 +38,7 @@ it('scores lyric-free syllables', () => {
     const f = computeFeatures(w.samples, w.sr);
     const syl = process.env.METHOD === 'greedy'
       ? greedySyllables(em, vocab, Number(process.env.MIN_PROB ?? 0.3)).map((s) => s.start - 0.04)
-      : vocalTracks(f, DEFAULT_STEM_PARAMS).find((t) => t.id === 'vocals-syllables')!.marks.map((m) => m.start);
+      : attackOnsets(f);
     const r = eventF(syl, refOn, 0.1);
     // Independent check: recall of the human-annotated word onsets (each starts a syllable).
     const human = readFileSync(`${JAM}words/${song}.csv`, 'utf8').trim().split('\n').slice(1).map((l) => +l.split(',')[0]);

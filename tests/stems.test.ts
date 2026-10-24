@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { bassTracks, DEFAULT_STEM_PARAMS, drumTracks, vocalTracks } from '../src/analysis/stems';
+import { bassTracks, DEFAULT_STEM_PARAMS, drumTracks } from '../src/analysis/stems';
+import { attackOnsets, DEFAULT_VOCAL_PARAMS, phrasesFrom, syllableSpans } from '../src/analysis/vocals';
 import { ANALYSIS_SR, computeFeatures } from '../src/dsp/features';
 import { eventF } from '../src/eval/metrics';
 import { synthLoop } from './synth';
@@ -57,16 +58,26 @@ describe('vocal tracks', () => {
   // Two "lines" of sung syllables separated by a breath.
   const syl: [number, number, number][] = [[64, 0.5, 0.3], [67, 0.85, 0.3], [69, 1.2, 0.5], [67, 2.6, 0.25], [64, 2.9, 0.25], [62, 3.2, 0.6]];
   const x = tones(syl, 4.5, 0.5);
-  const [phrases, syllables] = vocalTracks(computeFeatures(x, sr), DEFAULT_STEM_PARAMS);
+  const f = computeFeatures(x, sr);
+  const syllables = syllableSpans(attackOnsets(f), f);
+  const phrases = phrasesFrom(syllables, DEFAULT_VOCAL_PARAMS.breath);
 
   it('groups syllables into lines', () => {
-    expect(phrases.marks.length).toBe(2);
-    expect(phrases.marks[0].start).toBeCloseTo(0.5, 1);
-    expect(phrases.marks[1].start).toBeCloseTo(2.6, 1);
+    expect(phrases.length).toBe(2);
+    expect(phrases[0].start).toBeCloseTo(0.5, 1);
+    expect(phrases[1].start).toBeCloseTo(2.6, 1);
   });
 
   it('finds each syllable', () => {
-    const r = eventF(syllables.marks.map((m) => m.start), syl.map((s) => s[1]), 0.05);
+    const r = eventF(syllables.map((m) => m.start), syl.map((s) => s[1]), 0.05);
     expect(r.f).toBe(1);
+  });
+
+  it('holds each syllable until the next one in a smooth line, and to its release at the end', () => {
+    // Within a line the syllables touch (gaps under the join gap are closed)...
+    for (const i of [0, 1, 3, 4]) expect(syllables[i].end).toBeCloseTo(syllables[i + 1].start, 5);
+    // ...and the last syllable of each line ends near where its tone does.
+    expect(Math.abs(syllables[2].end - 1.7)).toBeLessThan(0.1);
+    expect(Math.abs(syllables[5].end - 3.8)).toBeLessThan(0.1);
   });
 });

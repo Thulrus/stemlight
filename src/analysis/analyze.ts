@@ -1,15 +1,13 @@
 import type { Mark, Track } from '../core/types';
 import { frameToTime, type Features } from '../dsp/features';
-import { estimateTempo, pickOnsets, trackBeats, trackDownbeats } from '../dsp/rhythm';
-import { barFeatures, energyChanges, guessRoles, labelSegments, noveltyCurve, pickBoundaries, selfSimilarity } from '../dsp/structure';
+import { estimateTempo, trackBeats, trackDownbeats } from '../dsp/rhythm';
+import { barFeatures, guessRoles, labelSegments, noveltyCurve, pickBoundaries, selfSimilarity } from '../dsp/structure';
 
 /** Default parameters for every track the full-mix analysis produces. */
 export const DEFAULT_PARAMS = {
   beats: { tightness: 100, priorBpm: 120 },
-  onsets: { sensitivity: 0.5, minGap: 0.08 },
   sections: { sensitivity: 0.5, minBars: 4, similarity: 0.6 },
   phrases: { sensitivity: 0.5, minBars: 2 },
-  energy: { thresholdDb: 4, spanBars: 2 },
 } satisfies Record<string, Record<string, number>>;
 
 export type MixParams = { [K in keyof typeof DEFAULT_PARAMS]: Record<keyof (typeof DEFAULT_PARAMS)[K], number> };
@@ -57,14 +55,6 @@ export function barsTrack(f: Features, r: Rhythm, params: Record<string, number>
   const beatTimes = r.beatFrames.map((t) => frameToTime(f, t));
   const end = Math.min(f.duration, (beatTimes[beatTimes.length - 1] ?? 0) + medianInterval(beatTimes));
   return { id: 'mix-bars', name: 'Bars', source: 'mix', params, marks: contiguous(times, end, (i) => String(i + 1)) };
-}
-
-export function onsetsTrack(f: Features, p: MixParams['onsets']): Track {
-  const step = 0.05;
-  return {
-    id: 'mix-onsets', name: 'Onsets', source: 'mix', params: p,
-    marks: pickOnsets(f.onset, f.fps, p).map((o) => ({ start: o.time, end: o.time + step, strength: o.strength })),
-  };
 }
 
 type Structure = { sections: Track; phrases: Track };
@@ -120,18 +110,6 @@ function barLoudness(f: Features, barFrames: number[], b: number): number {
   return 10 * Math.log10(sq / Math.max(1, z - a) + 1e-12);
 }
 
-export function energyTrack(f: Features, r: Rhythm, p: MixParams['energy']): Track {
-  const loud = r.barFrames.map((_, b) => barLoudness(f, r.barFrames, b));
-  const changes = energyChanges(loud, p.spanBars, p.thresholdDb);
-  return {
-    id: 'mix-energy', name: 'Energy', source: 'mix', params: p,
-    marks: changes.map((c) => {
-      const t = frameToTime(f, r.barFrames[c.bar]);
-      return { start: t, end: t + 0.05, label: c.kind, strength: Math.abs(c.amount) };
-    }),
-  };
-}
-
 /** All full-mix tracks, in display order. */
 export function mixTracks(f: Features, params: MixParams = DEFAULT_PARAMS, rhythm?: Rhythm): { rhythm: Rhythm; tracks: Track[] } {
   const r = rhythm ?? analyzeRhythm(f, params.beats);
@@ -143,8 +121,6 @@ export function mixTracks(f: Features, params: MixParams = DEFAULT_PARAMS, rhyth
       phrases,
       barsTrack(f, r, params.beats),
       beatsTrack(f, r, params.beats),
-      onsetsTrack(f, params.onsets),
-      energyTrack(f, r, params.energy),
     ],
   };
 }

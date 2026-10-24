@@ -39,3 +39,12 @@ describe('alignLyrics', () => {
     expect(starts[1]).toBeGreaterThan(starts[0]);
   });
 });
+
+describe('Whisper filler', () => {
+  it('drops sentences that are only filler, and keeps lyrics that contain the same words', async () => {
+    const { dropFiller } = await import('../src/lyrics/transcribe');
+    const words = (s: string) => s.split(' ').map((text) => ({ text }));
+    const kept = dropFiller(words('Music. Thank you. Cara mia, addio! [Music] Thank you for the music.')).map((w) => w.text);
+    expect(kept).toEqual(['Cara', 'mia,', 'addio!', 'Thank', 'you', 'for', 'the', 'music.']);
+  });
+});

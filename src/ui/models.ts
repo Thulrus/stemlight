@@ -29,7 +29,7 @@ export const MODELS: ModelInfo[] = [
   {
     id: 'htdemucs', option: 'separate', sub: false, gpuOnly: false, gpuPreferred: false, defaultOn: true,
     title: 'Separate stems',
-    desc: 'Splits the song into drums, bass, vocals and other, for Kick, Snare, Hats, Bass notes, Vocal phrases and more.',
+    desc: 'Splits the song into drums, bass, vocals and other, for Kick, Snare, Hats, Bass notes, the vocal tracks and the instruments’ melody.',
     model: 'HTDemucs',
   },
   {
@@ -39,15 +39,15 @@ export const MODELS: ModelInfo[] = [
     model: 'wav2vec2',
   },
   {
-    id: 'roformer', option: 'hqVocals', sub: true, gpuOnly: true, gpuPreferred: true, defaultOn: false,
+    id: 'roformer', option: 'hqVocals', sub: true, gpuOnly: true, gpuPreferred: true, defaultOn: true,
     title: 'High-quality vocals',
-    desc: 'A second, vocals-only model with much cleaner vocals. About 3× the work of the stem split.',
+    desc: 'A second, vocals-only model with much cleaner vocals, for better vocal tracks. The standard split can lose unusual voices (opera, heavily processed singing) entirely. About 3× the work of the stem split.',
     model: 'Mel-Band RoFormer',
   },
   {
     id: 'lead', option: 'lead', sub: true, gpuOnly: true, gpuPreferred: true, defaultOn: false,
     title: 'Separate lead and backing vocals',
-    desc: 'Syllables and lyrics follow the lead singer, and backing vocals get their own track.',
+    desc: 'Syllables follow the lead singer where there is one, and backing vocals get their own tracks (phrases and notes).',
     model: 'BS-RoFormer karaoke',
   },
   {

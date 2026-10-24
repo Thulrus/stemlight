@@ -166,25 +166,3 @@ export function guessRoles(letters: string[], loudness: number[]): string[] {
     return 'bridge';
   });
 }
-
-/**
- * Energy rise/drop points: bars where the mean loudness of the next `span` bars
- * differs from the previous `span` bars by more than `thresholdDb`.
- */
-export function energyChanges(barLoudnessDb: number[], span = 2, thresholdDb = 4): { bar: number; kind: 'rise' | 'drop'; amount: number }[] {
-  const n = barLoudnessDb.length;
-  const diff = new Float64Array(n);
-  for (let i = span; i <= n - span; i++) {
-    let before = 0, after = 0;
-    for (let k = 0; k < span; k++) { before += barLoudnessDb[i - 1 - k]; after += barLoudnessDb[i + k]; }
-    diff[i] = (after - before) / span;
-  }
-  const out: { bar: number; kind: 'rise' | 'drop'; amount: number }[] = [];
-  for (let i = span; i <= n - span; i++) {
-    const d = diff[i];
-    if (Math.abs(d) < thresholdDb) continue;
-    const isPeak = Math.abs(d) >= Math.abs(diff[i - 1] ?? 0) && Math.abs(d) > Math.abs(diff[i + 1] ?? 0);
-    if (isPeak) out.push({ bar: i, kind: d > 0 ? 'rise' : 'drop', amount: d });
-  }
-  return out;
-}

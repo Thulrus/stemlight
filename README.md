@@ -1,6 +1,6 @@
 # Stemlight
 
-**Auto-timing tracks for xLights.** Drop in a song and get timing tracks to import into your xLights sequence: song structure (sections, phrases, bars, beats), per-instrument tracks from stem separation (vocal phrases and syllables, backing vocals, kick, snare, hats, bass notes, the lead melody of guitars and keys), and, with lyrics, words, labeled syllables and a phrases/words/phonemes track for singing faces.
+**Auto-timing tracks for xLights.** Drop in a song and get timing tracks to import into your xLights sequence: song structure (sections, phrases, bars, beats), and one track per musical part from stem separation (vocal phrases, syllables and notes, backing vocals, kick, snare, hats, bass notes, the instruments' melody), and, with lyrics, words, labeled syllables and a phrases/words/phonemes track for singing faces. Marks have a start *and* an end: a sung note lasts as long as it's sung, so an effect snapped to it needs no fixing. Any track can be split between several props (alternate beats between two pumpkins, or low notes on one and high notes on another).
 
 Everything runs in your browser. There's no server and your audio never leaves your machine.
 
@@ -14,7 +14,8 @@ Milestones from [SPEC.md](SPEC.md):
 - [x] Light preview: one blinking light per exported track, in sync with playback
 - [x] Optional high-quality vocals (Mel-Band RoFormer) and lyrics (Whisper) for better vocal tracks
 - [x] Vocal timing from a speech model: lyrics (pasted or transcribed) aligned letter by letter, syllables and phonemes, a three-layer Lyrics track for singing faces; lead/backing vocal separation
-- [x] Note tracks: lead melody and note onsets of guitars/keys, the sung melody (Basic Pitch)
+- [x] Note tracks: the sung melody note by note, backing vocal notes, the instruments' melody (Basic Pitch + a Viterbi note decoder)
+- [x] Split any track between several props (by turns or by pitch); optional snap to the beat grid
 - [ ] **M3**: light editing, …
 - [ ] **M4**: session save/load, presets
 
@@ -24,14 +25,16 @@ Milestones from [SPEC.md](SPEC.md):
 2. With **Separate stems** on, the song is split into drums, bass, vocals and other in the background, and the instrument tracks are added when it's done. The model (~170 MB) downloads once and is cached, and the stems for each song are cached too. Measured on a desktop: with WebGPU (RTX 3060) a 1:43 song separates in about 25 s; CPU-only (8 WASM threads) takes a little longer than the song itself (a 2:27 song took about 3 minutes).
    Already have stems from another tool? Drop them together with the song, named `drums`, `bass`, `vocals`, `other`.
    More options build on the stems:
-   - **High-quality vocals** runs a second, vocals-only model (Mel-Band RoFormer, 464 MB) for a much cleaner vocal stem, which mainly improves Vocal phrases. It needs a GPU: about 100 s for a 3-minute song on an RTX 3060.
-   - **Separate lead and backing vocals** runs a karaoke model (BS-RoFormer, 210 MB, GPU only) that takes the lead singer out of the vocals. Syllables and lyrics follow the lead, and harmonies, responses and "oohs" get their own **Backing vocals** track.
+   - **High-quality vocals** (on by default when there's a GPU) runs a second, vocals-only model (Mel-Band RoFormer, 464 MB) for a much cleaner vocal stem, which improves every vocal track. The standard split can lose unusual voices entirely: in Portal 2's *Cara Mia Addio* it puts the opera singer in "other", leaving the vocal tracks empty. It needs a GPU: about 100 s for a 3-minute song on an RTX 3060.
+   - **Separate lead and backing vocals** runs a karaoke model (BS-RoFormer, 210 MB, GPU only) that takes the lead singer out of the vocals. Syllables follow the lead where there is one, and harmonies, responses and "oohs" get **Backing vocals** (phrases) and **Backing vocal notes**. Where the model hears no lead (a group singing in unison, which it calls backing), the vocal tracks follow all the vocals.
    - **Precise vocal syllables and lyric timing** (on by default) runs a speech model (wav2vec2, 190 MB on GPUs with fp16 support, else 380 MB) that hears where each sung consonant and vowel starts. Without lyrics it gives the **Vocal syllables** track; with lyrics it aligns them letter by letter.
-   - **Transcribe lyrics** runs Whisper (about 300 MB) when you haven't pasted the lyrics. Whisper supplies the words; their timing comes from the speech model. Misheard words can be fixed afterwards with **Lyrics…** in the editor, which re-aligns in a moment.
+   - **Transcribe lyrics** runs Whisper (about 300 MB) when you haven't pasted the lyrics. Whisper supplies the words; their timing comes from the speech model. Misheard words can be fixed afterwards with **Lyrics…** in the editor, which re-aligns in a moment. Whisper only knows English here; on singing in other languages it writes nonsense, so paste the lyrics instead (its stock filler, like "Music." and "Thank you.", is dropped).
    Pasting the real lyrics (one line per lyric line, repeats included) on the start screen gives the best result: **Lyric lines**, **Lyric words**, labeled **Vocal syllables**, and a **Lyrics** track with three layers (phrases, words, and Preston Blair phonemes: AI, E, O, U, etc, L, WQ, MBP, FV), which xLights singing faces use directly.
    The start screen lists every option with its model size and whether it's already downloaded, and can download the models ahead of time (so the first song doesn't wait). While a song is processing, a status panel above the timeline lists each step, and the editor says when more tracks are still on the way.
-   Every song also gets note tracks from Basic Pitch (bundled, 230 KB): **Lead melody** (the riff, solo or piano line standing out of the guitars and keys), **Other note onsets** (strums, stabs, chord changes) and **Vocal notes** (the sung melody), labeled with note names.
+   The vocal tracks: **Vocal phrases** (sung lines, broken at breaths), **Vocal syllables** (one mark per syllable, lasting while it's sung, touching the next in a smooth line), and **Vocal notes** (syllables split further where the singer moves to a new note, labeled with note names: what to follow for a melisma or an opera line). Note tracks come from Basic Pitch (bundled, 230 KB), decoded into one line per part; **Instrument melody** follows the line that stands out of the guitars, keys and strings.
+   Tracks with no marks (Kick in a song without drums) are left out.
 3. Play it back and watch the **light preview** (one light per track checked for export), or turn on 🎧 on a track to hear a click on every mark. Use M/S to mute or solo stems. Tune with the sliders if needed.
+   To share a part between several props, select its track and set **Split into props**: *taking turns* (Beats alternate by beat number when the bars are regular, so beat 1 always lands on the same prop) or *by pitch* (note tracks: low notes on the first prop, high on the last). The export then has one track per prop, "Beats 1", "Beats 2", …. Note and syllable tracks can also **snap to beats** (off by default), for sequences drawn on the beat grid.
 3. Download one `.xtiming` with all selected tracks, or a zip with one file per track.
 4. In xLights, import it with **Import Timing Track**.
 
@@ -55,9 +58,18 @@ npm run build      # static build in dist/
 Benchmarks need copyrighted audio, which stays out of git in `fixtures/private/`:
 
 - `tests/eval.test.ts` compares Bars/Beats/Sections with xLights' own, given the song in `fixtures/private/`.
-- `tests/stems-eval.test.ts` compares the stem tracks with the hand-placed effects in the fixture sequence (pumpkins follow the vocals). It needs stems in `fixtures/private/stems/<song>/`, which `npm run tool:separate` creates from the songs in `example_data/` with the same separation code the browser runs, using `onnxruntime-node` and the model files in `fixtures/private/models/` (from https://huggingface.co/webnn/stem-separator).
+- `tests/bench.test.ts` (`npm run bench`) scores the tracks against five hand-made sequences in `fixtures/`. Each target is a group of props that follows one musical part, scored against the tracks meant to serve it (the best of them counts). Props whose effects tile a part are scored on start *and* end (both within 100 ms, 250 ms for whole phrases): a mark with the right start and the wrong length still has to be fixed by hand. Props that flash for a fixed short time are scored on starts. The cases: *Cara Mia Addio* (the lead soprano note by note, and an accompaniment alternated between two pumpkins), *Candy Girl* (lead, backing group, alternating beats, backing phrases), *Grim Grinning Ghosts* (syllable flashes, sung lines), the pumpkins in *This Is Halloween* and the drum circles in the Marilyn Manson *This Is Halloween*. It needs stems in `fixtures/private/stems/<song>/`, which `npm run tool:separate` creates from the songs in `example_data/` with the same separation code the browser runs, using `onnxruntime-node` and the model files in `fixtures/private/models/` (from https://huggingface.co/webnn/stem-separator). `VOCALS=vocals_hq` uses the RoFormer vocals (`npm run tool:vocals-hq`), `LEAD=1` adds lead/backing separation (`npm run tool:lead`), and the character model's output comes from `tools/emissions.test.ts`. Basic Pitch frames are computed and cached on first use. The app and the benchmark build tracks with the same code (`src/analysis/build.ts`).
+  `tools/prop-matrix.test.ts` lists, for every prop, which tracks follow it best.
 
-- `tests/bench.test.ts` (`npm run bench`) scores the vocal and drum tracks against four hand-made sequences in `fixtures/` (pumpkins in *This Is Halloween*, the hand-typed lyric track in *Candy Girl*, circles in *Grim Grinning Ghosts* and the Marilyn Manson *This Is Halloween*). `VOCALS=vocals_hq npm run bench` uses the RoFormer vocals, which `npm run tool:vocals-hq` creates.
+  Mean score per song, before and after the redesign around musical parts (old: onset- and level-based syllables and phrases, notes from Basic Pitch's own note decoding):
+
+  | Configuration | Old pipeline | Now |
+  |---|---|---|
+  | Default without a GPU (HTDemucs vocals, speech-model syllables) | 0.345 | 0.37 |
+  | High-quality vocals (the new default with a GPU) | n/a | 0.43 |
+  | High-quality vocals + lead/backing | 0.376 | 0.44 |
+
+  On *Cara Mia Addio* the lead voice went from 0.44 to 0.76 and the accompaniment is served by Beats split in two (0.79). Without high-quality vocals, the standard split loses that song's singer, so its lead scores 0.
 - `tools/whisper-eval.test.ts` runs Whisper on cached vocal stems and scores its word timing and lyrics.
 
 #### Vocal timing benchmark (JamendoLyrics)
@@ -98,9 +110,9 @@ npm run bench                     # stem tracks vs hand-made sequences
 ### Layout
 
 ```
-src/core       Track/Mark types, grid quantization, .xtiming parsing
+src/core       Track/Mark types, grid quantization, .xtiming parsing, splitting a track between props
 src/dsp        FFT, spectral features, onsets, tempo, beat tracking, downbeats, structure
-src/analysis   features -> Track builders (full mix and per stem), analysis worker
+src/analysis   features -> Track builders (build.ts: every track, shared by the app and the benchmark), analysis worker
 src/separation HTDemucs and RoFormer pipelines (vocals, lead/backing), separation worker
 src/lyrics     Whisper transcription (vocal-aware windows), lyrics worker
 src/align      lyrics → letters, CTC forced alignment, syllables and phonemes (CMUdict), greedy syllables

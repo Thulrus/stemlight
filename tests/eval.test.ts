@@ -37,7 +37,7 @@ describe.skipIf(!audio)('benchmark: This Is Halloween vs xLights built-in analys
         `Bars     ${fmt(bars)}`,
         `Sections ${fmt(sections)}  (ours: ${by.Sections.marks.map((m) => m.label).join(', ')})`,
         `Beat labels matching xLights on shared beats: ${labelAgree}/${by.Beats.marks.length}`,
-        `Phrases ${by.Phrases.marks.length}, Onsets ${by.Onsets.marks.length}, Energy ${by.Energy.marks.map((m) => m.label).join(' ')}`,
+        `Phrases ${by.Phrases.marks.length}`,
       ].join('\n'),
     );
     expect(beats.f).toBeGreaterThan(0.5);

@@ -3,20 +3,14 @@ import { bandOnset, frameToTime, type Features } from '../dsp/features';
 import { decimate, hzToMidi, midiName, yin } from '../dsp/pitch';
 import { pickOnsets } from '../dsp/rhythm';
 import type { StemName } from '../separation/htdemucs';
-import { framesToNotes, leadLine, type PitchFrames } from '../notes/basicPitch';
 
 export const DEFAULT_STEM_PARAMS = {
   kick: { sensitivity: 0.5, minGap: 0.1 },
   snare: { sensitivity: 0.5, minGap: 0.1 },
   hats: { sensitivity: 0.5, minGap: 0.07 },
   bassNotes: { thresholdDb: 30, minNote: 0.08, mergeGap: 0.05 },
-  // Phrase and syllable defaults were tuned against hand-placed pumpkin effects in
-  // fixtures/ThisIsHalloweenFilm.xsq (see tests/stems-eval.test.ts).
+  // Backing vocals by level, when there are no note frames for them.
   vocalPhrases: { thresholdDb: 12, mergeGap: 0.2, minDur: 0.3 },
-  vocalSyllables: { thresholdDb: 15, sensitivity: 0.85, minDur: 0.15 },
-  otherAccents: { sensitivity: 0.3, minGap: 0.15 },
-  // Basic Pitch notes in the "other" stem (reference defaults: onset 0.5, frame 0.3, 127 ms).
-  otherNotes: { onsetThresh: 0.5, frameThresh: 0.3, minNote: 0.12 },
   // Lyrics aligned to the vocals (see lyricTracks.ts). CTC letter spikes come ~50 ms after
   // the human-marked word onset on JamendoLyrics, hence the default offset.
   lyrics: { offsetMs: -40, decayDb: 15, maxHold: 2.5 },
@@ -206,114 +200,4 @@ export function bassTracks(f: Features, samples: Float32Array, p: StemParams['ba
     if (gap > 0 && gap < p.mergeGap) marks[i - 1].end = marks[i].start;
   }
   return [track('bass', 'notes', 'Bass notes', marks, p)];
-}
-
-/**
- * Vocal phrases (activity spans) and syllables: within active regions, split at vocal
- * onsets; each syllable ends at the next onset, the end of the region, or where the
- * level falls 15 dB below the syllable's peak.
- */
-export function vocalTracks(f: Features, p: Pick<StemParams, 'vocalPhrases' | 'vocalSyllables'>, lead?: Features): Track[] {
-  const phrases = activitySpans(f, p.vocalPhrases);
-  // Syllables follow the lead singer when the backing vocals have been separated out.
-  const sf = lead ?? f;
-  const level = levelDb(sf);
-  const regions = activitySpans(sf, { thresholdDb: p.vocalSyllables.thresholdDb, mergeGap: 0.05, minDur: p.vocalSyllables.minDur }, level);
-  const onsets = pickOnsets(sf.onset, sf.fps, { sensitivity: p.vocalSyllables.sensitivity, minGap: 0.1 }).map((o) => o.time);
-  const syllables: Mark[] = [];
-  let k = 0;
-  for (const r of regions) {
-    while (k < onsets.length && onsets[k] < r.start) k++;
-    const bounds = [r.start];
-    while (k < onsets.length && onsets[k] < r.end) {
-      if (onsets[k] - bounds[bounds.length - 1] >= p.vocalSyllables.minDur) bounds.push(onsets[k]);
-      k++;
-    }
-    bounds.push(r.end);
-    for (let i = 0; i + 1 < bounds.length; i++) {
-      const a = Math.round(bounds[i] * f.fps);
-      const b = Math.round(bounds[i + 1] * f.fps);
-      // End where the level falls 15 dB below the syllable's own peak (measured from the
-      // peak, since the boundary frame may still hold the previous syllable's tail).
-      let peakAt = a;
-      for (let j = a; j < b && j < sf.nFrames; j++) if (level[j] > level[peakAt]) peakAt = j;
-      let end = b;
-      for (let j = peakAt; j < b && j < sf.nFrames; j++) {
-        if (level[j] < level[peakAt] - 15) { end = j; break; }
-      }
-      const s = bounds[i];
-      const e = Math.min(bounds[i + 1], frameToTime(sf, end));
-      if (e - s >= p.vocalSyllables.minDur * 0.6) syllables.push({ start: s, end: e });
-    }
-  }
-  return [
-    track('vocals', 'phrases', 'Vocal phrases', phrases, p.vocalPhrases),
-    track('vocals', 'syllables', 'Vocal syllables', syllables, p.vocalSyllables),
-  ];
-}
-
-/**
- * Backing vocals (harmonies, responses, "ooh"s): where the vocals-minus-lead residue is
- * active and is a real part of the vocals (within 12 dB of them), not separation leftovers.
- */
-export function backingTracks(backing: Features, vocals: Features, p: StemParams['vocalPhrases']): Track[] {
-  const b = levelDb(backing);
-  const v = levelDb(vocals);
-  const n = Math.min(b.length, v.length);
-  const gated = new Float32Array(n);
-  for (let i = 0; i < n; i++) gated[i] = b[i] - v[i] > -12 ? b[i] : -120;
-  return [track('vocals', 'backing', 'Backing vocals', activitySpans(backing, p, gated), p)];
-}
-
-/**
- * Strong accents in the "other" stem (guitars, keys, strings, horns). That stem rarely
- * goes silent, so activity spans are useless there; note tracks come with pitch tracking.
- */
-export function otherTracks(f: Features, p: StemParams['otherAccents'], present: Presence = () => true): Track[] {
-  return [track('other', 'accents', 'Other accents', points(pickOnsets(f.onset, f.fps, p).filter((o) => present(o.time))), p)];
-}
-
-/**
- * Note tracks from Basic Pitch on the "other" stem: the lead line (whichever note stands out,
- * favouring the top of chords: the riff, solo or piano melody lights should follow) and every
- * note onset (strums, stabs and chord changes, grouped within 40 ms), both labeled C4 etc.
- */
-export function noteTracks(frames: PitchFrames, p: StemParams['otherNotes'], present: Presence = () => true): Track[] {
-  const notes = framesToNotes(frames, p).filter((n) => present(n.start));
-  const lead = leadLine(notes, p.minNote).map((n) => ({ start: n.start, end: n.end, label: midiName(n.midi), strength: n.amp }));
-  const onsets: Mark[] = [];
-  for (const n of notes) {
-    const last = onsets[onsets.length - 1];
-    if (last && n.start - last.start < 0.04) {
-      last.label = `${last.label} ${midiName(n.midi)}`;
-      continue;
-    }
-    onsets.push({ start: n.start, end: n.start + 0.05, label: midiName(n.midi), strength: n.amp });
-  }
-  return [track('other', 'lead', 'Lead melody', lead, p), track('other', 'notes', 'Other note onsets', onsets, p)];
-}
-
-/** The sung melody as notes (Basic Pitch on the vocals, one note at a time), labeled C4 etc. */
-export function vocalNotesTrack(frames: PitchFrames, p: StemParams['otherNotes'], present: Presence = () => true): Track {
-  const notes = leadLine(framesToNotes(frames, p).filter((n) => present(n.start)), p.minNote);
-  return track('vocals', 'notes', 'Vocal notes', notes.map((n) => ({ start: n.start, end: n.end, label: midiName(n.midi), strength: n.amp })), p);
-}
-
-/** Every stem track available for the stems we have, in display order. */
-export function stemTracks(
-  feats: Partial<Record<StemName, Features>>,
-  samples: Partial<Record<StemName, Float32Array>>,
-  p: StemParams,
-  mix?: Features,
-  vocalParts: { lead?: Features; backing?: Features; pitch?: Partial<Record<'other' | 'vocals', PitchFrames>> } = {},
-): Track[] {
-  const out: Track[] = [];
-  if (feats.vocals) out.push(...vocalTracks(feats.vocals, p, vocalParts.lead));
-  if (feats.vocals && vocalParts.backing) out.push(...backingTracks(vocalParts.backing, feats.vocals, p.vocalPhrases));
-  if (feats.drums) out.push(...drumTracks(feats.drums, p, presence(feats.drums, mix)));
-  if (feats.bass && samples.bass) out.push(...bassTracks(feats.bass, samples.bass, p.bassNotes, presence(feats.bass, mix)));
-  if (feats.other) out.push(...otherTracks(feats.other, p.otherAccents, presence(feats.other, mix)));
-  if (feats.other && vocalParts.pitch?.other) out.push(...noteTracks(vocalParts.pitch.other, p.otherNotes, presence(feats.other, mix)));
-  if (feats.vocals && vocalParts.pitch?.vocals) out.push(vocalNotesTrack(vocalParts.pitch.vocals, p.otherNotes, presence(feats.vocals, mix)));
-  return out;
 }

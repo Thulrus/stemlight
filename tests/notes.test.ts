@@ -1,43 +1,46 @@
 import * as ort from 'onnxruntime-node';
 import { describe, expect, it } from 'vitest';
-import { basicPitchFrames, BP_SR, framesToNotes, leadLine } from '../src/notes/basicPitch';
+import { basicPitchFrames, BP_SR } from '../src/notes/basicPitch';
+import { DEFAULT_MELODY_PARAMS, melodyNotes } from '../src/notes/melody';
 
-/** A plucked-string-like tone: a few decaying harmonics. */
-function melody(notes: { t: number; dur: number; midi: number }[], seconds: number) {
+/** A sung-like tone: a few harmonics, with optional vibrato (semitones) and a release. */
+function melody(notes: { t: number; dur: number; midi: number; vib?: number }[], seconds: number, decay = 0.5) {
   const x = new Float32Array(Math.round(seconds * BP_SR));
   for (const n of notes) {
-    const f0 = 440 * 2 ** ((n.midi - 69) / 12);
     const a = Math.round(n.t * BP_SR);
+    let phase = 0;
     for (let i = 0; i < n.dur * BP_SR && a + i < x.length; i++) {
       const u = i / BP_SR;
+      const f0 = 440 * 2 ** ((n.midi - 69 + (n.vib ?? 0) * Math.sin(2 * Math.PI * 5.5 * u)) / 12);
+      phase += (2 * Math.PI * f0) / BP_SR;
       let v = 0;
-      for (let h = 1; h <= 5; h++) v += Math.sin(2 * Math.PI * f0 * h * u) / h;
-      x[a + i] += 0.25 * v * Math.exp(-u * 2) * Math.min(1, u / 0.005);
+      for (let h = 1; h <= 5; h++) v += Math.sin(h * phase) / h;
+      x[a + i] += 0.25 * v * Math.exp(-u * decay) * Math.min(1, u / 0.01) * Math.min(1, (n.dur - u) / 0.03);
     }
   }
   return x;
 }
 
-describe('Basic Pitch notes', () => {
-  it('finds a melody over a sustained chord, with the right pitches and onsets', async () => {
+const levelOf = (x: Float32Array) => (t: number) => {
+  const i = Math.round(t * BP_SR);
+  let sq = 0;
+  for (let j = Math.max(0, i - 256); j < Math.min(x.length, i + 256); j++) sq += x[j] * x[j];
+  return 10 * Math.log10(sq / 512 + 1e-12);
+};
+
+describe('melody notes', () => {
+  it('follows a legato line note by note, through vibrato, as touching notes', async () => {
     const session = await ort.InferenceSession.create(new URL('../src/notes/basic-pitch.onnx', import.meta.url).pathname);
-    // Melody C5 D5 E5 G5 E5 (MIDI 72..) over a C3–E3–G3 pad, spanning a window boundary (~1.6 s).
-    const tune = [72, 74, 76, 79, 76].map((midi, i) => ({ t: 0.5 + i * 0.5, dur: 0.45, midi }));
-    const pad = [48, 52, 55].map((midi) => ({ t: 0.4, dur: 3.2, midi }));
-    const x = melody([...tune, ...pad], 4.5);
-    for (let i = 0; i < x.length; i++) x[i] *= 0.8;
+    // A4 A#4 C5 A#4 A4 sung without gaps (one tone ends where the next starts), with vibrato.
+    const tune = [69, 70, 72, 70, 69].map((midi, i) => ({ t: 0.5 + i * 0.6, dur: 0.6, midi, vib: 0.4 }));
+    const x = melody(tune, 4);
     const frames = await basicPitchFrames(session, ort.Tensor as never, x);
-    // Frame times rise steadily and cover the audio.
-    expect(frames.times[0]).toBeGreaterThanOrEqual(0);
-    expect(frames.times[frames.times.length - 1]).toBeGreaterThan(4.3);
-    const notes = framesToNotes(frames);
-    for (const n of tune) {
-      const hit = notes.find((m) => m.midi === n.midi && Math.abs(m.start - n.t) < 0.06);
-      expect(hit, `MIDI ${n.midi} at ${n.t}`).toBeTruthy();
-    }
-    // While the melody plays it is the lead; the pad's top note leads only when alone.
-    const lead = leadLine(notes).filter((n) => n.start >= 0.45 && n.start < 2.8);
-    expect(lead.map((n) => n.midi)).toEqual(tune.map((n) => n.midi));
-    for (const [i, n] of tune.entries()) expect(Math.abs(lead[i].start - n.t)).toBeLessThan(0.06);
+    const notes = melodyNotes(frames, levelOf(x), -40, DEFAULT_MELODY_PARAMS);
+    expect(notes.map((n) => n.midi)).toEqual(tune.map((n) => n.midi));
+    notes.forEach((n, i) => {
+      expect(Math.abs(n.start - tune[i].t)).toBeLessThan(0.07);
+      if (i + 1 < notes.length) expect(n.end).toBeCloseTo(notes[i + 1].start, 5);
+    });
+    expect(Math.abs(notes[4].end - 3.5)).toBeLessThan(0.1);
   });
 });

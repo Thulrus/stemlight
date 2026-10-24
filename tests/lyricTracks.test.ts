@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AlignedWord } from '../src/align/align';
 import { fuseEmissions, type Emissions } from '../src/align/ctc';
 import { greedySyllables } from '../src/align/greedy';
-import { ctcSyllableTrack, lyricTracks, wordsFromAsr } from '../src/analysis/lyricTracks';
+import { lyricTracks, wordsFromAsr } from '../src/analysis/lyricTracks';
 import { DEFAULT_STEM_PARAMS } from '../src/analysis/stems';
 import { toXTiming } from '../src/export/xtiming';
 import { ALIGNER_VOCAB } from '../src/separation/model';
@@ -74,8 +74,6 @@ describe('character-model syllables', () => {
     const syl = greedySyllables(em, ALIGNER_VOCAB);
     expect(syl.map((s) => s.text)).toEqual(['CAN', 'DY', 'GIRL']);
     syl.forEach((s, i) => expect(s.start).toBeCloseTo([0.06, 0.24, 0.42][i], 5));
-    const track = ctcSyllableTrack(syl.map((s) => s.start), undefined, p0);
-    expect(track.marks).toHaveLength(3);
   });
   it('fuses two sources so a letter heard in either stays likely', () => {
     const a = spikes(10, { 2: 'A' });

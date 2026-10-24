@@ -50,18 +50,23 @@ Point events are marks with a short duration (e.g. one grid step). Spans are mar
 
 ## 5. Track catalog
 
-Per stem, with the mark type each produces:
+One track per musical part, with the mark type each produces. Sequencers follow a part (a singer, a backing group, an accompaniment figure) and snap effects to its marks, so span marks must have the right start **and** end: a note lasts as long as it sounds, and in a smooth line marks touch.
 
 | Source | Tracks | Marks |
 |---|---|---|
 | Drums | Kick, Snare, Hats/cymbals (split by band after separation) | point |
 | Bass | Bass notes | span (onset to offset) + pitch label |
-| Vocals | Phrases (voice activity) | span |
-| Vocals | Words/syllables (stretch goal, see below) | span |
-| Other / guitar / piano | Notes or note groups (Basic Pitch or similar) | span + pitch label |
-| Full mix | Beats (labeled 1-4), Bars (numbered) | point / span |
+| Vocals | Vocal phrases (runs of syllables and notes without a breath) | span |
+| Vocals | Vocal syllables (speech model, or vocal attacks), held while sung | span |
+| Vocals | Vocal notes: syllables split where the pitch moves to a new note | span + pitch label |
+| Backing vocals (with lead separation) | Backing vocals (phrases), Backing vocal notes | span (+ pitch label) |
+| Other (guitars, keys, strings) | Instrument melody: the line that stands out | span + pitch label |
+| Full mix | Beats (labeled 1-4), Bars (numbered) | span |
 | Full mix | Sections (labeled A/B/C... and a coarse "intro/verse/chorus" guess), plus a finer "phrases" level | span |
-| Full mix | Energy-rise / drop markers | point |
+
+Any track can be split between several props on export, taking turns (Beats by beat number) or by pitch. Tracks with no marks are left out.
+
+Quality is measured against hand-made sequences (tests/bench.test.ts), on start and end of each mark.
 
 Each track has user-adjustable parameters (sensitivity/threshold, minimum gap, merge gap for spans, quantize grid) with a live re-run on the cached analysis, not a full reprocess.
 

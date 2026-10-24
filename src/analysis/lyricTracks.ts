@@ -53,21 +53,6 @@ export function wordsFromAsr(asr: AsrWord[], maxGap = 0.8, maxLineWords = 12): {
   return { words, hints };
 }
 
-/**
- * Vocal syllables found by the character model without lyrics (see greedySyllables), with
- * ends like lyricTracks': at the next syllable or where the vocal decays.
- */
-export function ctcSyllableTrack(starts: number[], vocal: Features | undefined, p: AlignParams = DEFAULT_STEM_PARAMS.lyrics): Track {
-  const off = p.offsetMs / 1000;
-  const decayEnd = decayFinder(vocal, p.decayDb);
-  const s = starts.map((t) => t + off);
-  const marks = s.map((t, i) => {
-    const limit = Math.min(s[i + 1] ?? Infinity, t + p.maxHold);
-    return { start: t, end: Math.max(t + 0.05, decayEnd(t, t + 0.06, limit)) };
-  });
-  return { id: 'vocals-ctc-syllables', name: 'Vocal syllables', source: 'vocals', marks, params: p as unknown as Record<string, number> };
-}
-
 /** (start, from, limit) → where the vocal falls `decayDb` below its peak since `start`, searching [from, limit]. */
 function decayFinder(vocal: Features | undefined, decayDb: number) {
   const level = vocal ? levelDb(vocal) : undefined;
