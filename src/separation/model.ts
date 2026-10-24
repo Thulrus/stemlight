@@ -73,7 +73,7 @@ export const ALIGNER_VOCAB: Record<string, number> = {
  */
 export const LEAD_FILE: ModelFile = {
   name: 'bs-roformer-karaoke.onnx',
-  url: import.meta.env.VITE_LEAD_MODEL_URL ?? 'https://huggingface.co/Thulrus/stemlight-models/resolve/main/bs-roformer-karaoke.onnx',
+  url: import.meta.env.VITE_LEAD_MODEL_URL ?? 'https://huggingface.co/HiggityPiggity/stemlight-models/resolve/main/bs-roformer-karaoke.onnx',
   bytes: 209806570,
   sha256: '7bbf6a275f8468efa2e084f50437ee476faf61ad7de0bd21d8df9c23dea318a5',
 };
