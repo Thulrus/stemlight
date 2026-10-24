@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import * as ort from 'onnxruntime-web/webgpu';
 import { hashBytes, idbGet, idbPut } from '../storage/idb';
-import { hasRealGpu } from './gpu';
+import { hasRealGpu, isGpuMemoryError } from './gpu';
 import { HTDEMUCS_FILES, MODEL_CACHE_KEY, ROFORMER_FILE, type ModelFile } from './model';
 import type { FromSeparator, SeparatorModel, ToSeparator } from './protocol';
 import { separateVocalsRoformer } from './roformer';
@@ -56,11 +56,11 @@ async function loadFiles(model: SeparatorModel, files: ModelFile[]): Promise<Uin
 }
 
 /** Create a session on WebGPU when a real GPU exists, otherwise multi-threaded WASM. */
-async function createSession(model: SeparatorModel, graph: Uint8Array, opts: ort.InferenceSession.SessionOptions, gpuOnly = false) {
+async function createSession(model: SeparatorModel, graph: Uint8Array, opts: ort.InferenceSession.SessionOptions, gpuOnly = false, cpuOnly = false) {
   // Multi-threaded WASM needs cross-origin isolation (provided by coi-serviceworker on Pages).
   const threads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
   ort.env.wasm.numThreads = threads;
-  if (await hasRealGpu()) {
+  if (!cpuOnly && (await hasRealGpu())) {
     try {
       const t1 = performance.now();
       const s = await ort.InferenceSession.create(graph, { ...opts, executionProviders: ['webgpu'] });
@@ -77,15 +77,24 @@ async function createSession(model: SeparatorModel, graph: Uint8Array, opts: ort
   return s;
 }
 
-async function getSession(model: SeparatorModel): Promise<ort.InferenceSession> {
+/** Free a model's session (and its GPU buffers). */
+async function release(model: SeparatorModel) {
+  const s = sessions[model];
+  delete sessions[model];
+  await s?.release().catch(() => {});
+}
+
+async function getSession(model: SeparatorModel, cpuOnly = false): Promise<ort.InferenceSession> {
   const existing = sessions[model];
   if (existing) return existing;
+  // Only one model on the GPU at a time: each holds hundreds of MB to a few GB of buffers.
+  for (const other of Object.keys(sessions) as SeparatorModel[]) if (other !== model) await release(other);
   if (model === 'htdemucs') {
     const [graph, data] = await loadFiles(model, HTDEMUCS_FILES);
     sessions.htdemucs = await createSession(model, graph, {
       graphOptimizationLevel: 'all',
       externalData: [{ path: HTDEMUCS_FILES[1].name, data }],
-    });
+    }, false, cpuOnly);
   } else {
     // RoFormer is ~3x HTDemucs's compute: fine on a GPU, impractically slow on CPU.
     if (!(await hasRealGpu())) throw new Error('needs-gpu');
@@ -109,13 +118,28 @@ if (!isOrtThread) self.onmessage = (e: MessageEvent<ToSeparator>) => {
       if (job !== currentJob) throw new Error('cancelled');
       const cancelled = () => job !== currentJob;
       if (msg.type === 'separate') {
-        const s = await getSession('htdemucs');
-        const stems = await separate(s, ort.Tensor, msg.left, msg.right, (done, total) => post({ type: 'segment', model: 'htdemucs', done, total }), cancelled);
+        let stems;
+        try {
+          stems = await separate(await getSession('htdemucs', !!msg.cpuOnly), ort.Tensor, msg.left, msg.right, (done, total) => post({ type: 'segment', model: 'htdemucs', done, total }), cancelled);
+        } catch (err) {
+          // Out of GPU memory (other tabs/apps may hold most of it). This worker's WebGPU state
+          // is unusable afterwards, so the app retries in a fresh worker on the CPU.
+          if (isGpuMemoryError(err)) throw new Error('needs-gpu-memory');
+          throw err;
+        }
         post({ type: 'done', stems }, Object.values(stems).map((x) => x.buffer));
       } else {
-        const s = await getSession('roformer');
-        const vocals = await separateVocalsRoformer(s, ort.Tensor, msg.left, msg.right, (done, total) => post({ type: 'segment', model: 'roformer', done, total }), cancelled);
-        post({ type: 'vocals-hq', vocals }, [vocals.buffer]);
+        try {
+          const s = await getSession('roformer');
+          const vocals = await separateVocalsRoformer(s, ort.Tensor, msg.left, msg.right, (done, total) => post({ type: 'segment', model: 'roformer', done, total }), cancelled);
+          post({ type: 'vocals-hq', vocals }, [vocals.buffer]);
+        } catch (err) {
+          if (!isGpuMemoryError(err)) throw err;
+          console.warn('[separator] GPU ran out of memory for high-quality vocals', err);
+          throw new Error('needs-gpu-memory');
+        } finally {
+          await release('roformer');
+        }
       }
     } catch (err) {
       post({ type: 'error', message: err instanceof Error ? err.message : String(err) });

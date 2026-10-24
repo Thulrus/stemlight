@@ -1,6 +1,6 @@
 import type { AsrWord } from '../analysis/lyrics';
 
-export type ToLyrics = { type: 'transcribe'; audio16k: Float32Array } | { type: 'cancel' };
+export type ToLyrics = { type: 'transcribe'; audio16k: Float32Array; cpuOnly?: boolean } | { type: 'cancel' };
 
 export type FromLyrics =
   | { type: 'download'; loaded: number; total: number }

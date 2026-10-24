@@ -118,6 +118,8 @@ export class App {
   private separating = false;
   /** Stems were sent for analysis and their tracks haven't arrived yet. */
   private stemsPending = false;
+  /** Fallback notes from the last pipeline run (e.g. "ran on the CPU"), kept on screen. */
+  private pipelineNotes = '';
   private fileHash = '';
   private loadId = 0;
   private wantStems = true;
@@ -261,6 +263,7 @@ export class App {
     let stereo: { left: Float32Array; right: Float32Array } | undefined;
     const getStereo = async () => (stereo ??= await toStereo(buffer, SEPARATOR_SR));
     const notes: string[] = [];
+    this.pipelineNotes = '';
     this.separating = true;
     try {
       // 1. Stems.
@@ -277,7 +280,17 @@ export class App {
         } else {
           this.setStemStatus('Preparing stem separation…', false, true);
           const { left, right } = await getStereo();
-          const m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice() }, 'Separating stems', live);
+          let m: FromSeparator;
+          try {
+            m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice() }, 'Separating stems', live);
+          } catch (err) {
+            if (!(err instanceof Error && err.message === 'needs-gpu-memory')) throw err;
+            // Out of GPU memory: start over on the CPU in a fresh worker.
+            this.separator?.terminate();
+            this.separator = undefined;
+            notes.push('The GPU ran out of memory, so stems were separated on the CPU. Closing other GPU-heavy tabs or apps can help.');
+            m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice(), cpuOnly: true }, 'Separating stems', live);
+          }
           if (m.type !== 'done') return;
           stems = m.stems;
           void idbPut(this.cacheKey('stems'), Object.fromEntries(STEM_NAMES.map((n) => [n, toInt16(m.stems[n])])));
@@ -303,6 +316,7 @@ export class App {
             }
           } catch (err) {
             if (err instanceof Error && err.message === 'needs-gpu') notes.push('High-quality vocals need a GPU (WebGPU), so the standard vocals were used.');
+            else if (err instanceof Error && err.message === 'needs-gpu-memory') notes.push('There wasn’t enough free GPU memory for high-quality vocals, so the standard vocals were used. Closing other GPU-heavy tabs or apps can help.');
             else throw err;
           }
         }
@@ -325,16 +339,29 @@ export class App {
         let words = await idbGet<AsrWord[]>(key);
         if (!words) {
           this.setStemStatus('Preparing lyrics transcription…', false, true);
-          words = await this.lyricsJob(await resample(vocals, ANALYSIS_SR, 16000), live);
+          const audio16k = await resample(vocals, ANALYSIS_SR, 16000);
+          try {
+            words = await this.lyricsJob(audio16k.slice(), live);
+          } catch (err) {
+            if (!(err instanceof Error && err.message === 'needs-gpu-memory')) throw err;
+            this.lyricsWorker?.terminate();
+            this.lyricsWorker = undefined;
+            notes.push('The GPU ran out of memory, so lyrics were transcribed on the CPU.');
+            words = await this.lyricsJob(audio16k, live, true);
+          }
           if (words) void idbPut(key, words);
         }
+        // Whisper holds a lot of GPU memory; free it (it reloads from the browser cache).
+        this.lyricsWorker?.terminate();
+        this.lyricsWorker = undefined;
         if (!live()) return;
         if (!words) throw new Error('no lyrics were returned');
         this.stemsPending = true;
         this.send({ type: 'lyrics', words, params: this.params });
       }
       this.separating = false;
-      this.setStemStatus(notes.join(' '), false);
+      this.pipelineNotes = notes.join(' ');
+      this.setStemStatus(this.pipelineNotes, false);
     } catch (err) {
       this.separating = false;
       if (/crashed/.test(String(err))) {
@@ -380,7 +407,7 @@ export class App {
   }
 
   /** Transcribe vocals (16 kHz mono) with Whisper, mirroring progress in the banner. */
-  private lyricsJob(audio16k: Float32Array, live: () => boolean): Promise<AsrWord[] | undefined> {
+  private lyricsJob(audio16k: Float32Array, live: () => boolean, cpuOnly = false): Promise<AsrWord[] | undefined> {
     this.lyricsWorker ??= new Worker(new URL('../lyrics/worker.ts', import.meta.url), { type: 'module' });
     const worker = this.lyricsWorker;
     let start = 0;
@@ -405,7 +432,7 @@ export class App {
         }
       };
       worker.onerror = (e) => { e.preventDefault(); reject(new Error(e.message || 'the lyrics worker crashed (possibly out of memory)')); };
-      worker.postMessage({ type: 'transcribe', audio16k } satisfies ToLyrics, [audio16k.buffer]);
+      worker.postMessage({ type: 'transcribe', audio16k, cpuOnly } satisfies ToLyrics, [audio16k.buffer]);
     });
   }
 
@@ -494,8 +521,10 @@ export class App {
         this.stemsPending = false;
         if (!this.separating && !$('#stem-status').classList.contains('error')) {
           const lyrics = msg.tracks.some((t) => t.id === 'vocals-lyric-words');
-          this.setStemStatus(`Added ${n} instrument${lyrics ? ' and lyric' : ''} tracks from the stems.`);
-          setTimeout(() => { if (!this.separating && !this.stemsPending) this.setStemStatus(); }, 4000);
+          const added = `Added ${n} instrument${lyrics ? ' and lyric' : ''} tracks from the stems.`;
+          this.setStemStatus(this.pipelineNotes ? `${added} ${this.pipelineNotes}` : added);
+          // Plain success fades out; fallback notes stay until the next song.
+          if (!this.pipelineNotes) setTimeout(() => { if (!this.separating && !this.stemsPending) this.setStemStatus(); }, 4000);
         }
       }
       $('#file-name').textContent = this.fileName;

@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { env, pipeline, type AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
 import type { AsrWord } from '../analysis/lyrics';
-import { hasRealGpu } from '../separation/gpu';
+import { hasRealGpu, isGpuMemoryError } from '../separation/gpu';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import { WHISPER_MODEL, WHISPER_REVISION, type FromLyrics, type ToLyrics } from './protocol';
 import { ASR_SR, transcribeVocals } from './transcribe';
@@ -20,7 +20,7 @@ let asr: AutomaticSpeechRecognitionPipeline | undefined;
 let currentJob = 0;
 let queue: Promise<void> = Promise.resolve();
 
-async function getAsr(): Promise<AutomaticSpeechRecognitionPipeline> {
+async function getAsr(cpuOnly = false): Promise<AutomaticSpeechRecognitionPipeline> {
   if (asr) return asr;
   if (env.backends.onnx.wasm) env.backends.onnx.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
   const files = new Map<string, { loaded: number; total: number }>();
@@ -41,7 +41,7 @@ async function getAsr(): Promise<AutomaticSpeechRecognitionPipeline> {
       },
     } as never) as Promise<AutomaticSpeechRecognitionPipeline>;
   const t0 = performance.now();
-  let device: 'webgpu' | 'wasm' = (await hasRealGpu()) ? 'webgpu' : 'wasm';
+  let device: 'webgpu' | 'wasm' = !cpuOnly && (await hasRealGpu()) ? 'webgpu' : 'wasm';
   try {
     asr = await load(device);
   } catch (err) {
@@ -56,8 +56,18 @@ async function getAsr(): Promise<AutomaticSpeechRecognitionPipeline> {
   return asr;
 }
 
-async function transcribe(audio: Float32Array, cancelled: () => boolean): Promise<AsrWord[]> {
-  const pipe = await getAsr();
+async function transcribe(audio: Float32Array, cpuOnly: boolean, cancelled: () => boolean): Promise<AsrWord[]> {
+  try {
+    return await transcribeWith(await getAsr(cpuOnly), audio, cancelled);
+  } catch (err) {
+    // After a WebGPU out-of-memory error this worker's ONNX Runtime state is unusable, so the
+    // app retries in a fresh worker on the CPU.
+    if (isGpuMemoryError(err)) throw new Error('needs-gpu-memory');
+    throw err;
+  }
+}
+
+async function transcribeWith(pipe: AutomaticSpeechRecognitionPipeline, audio: Float32Array, cancelled: () => boolean): Promise<AsrWord[]> {
   return transcribeVocals(
     audio,
     async (chunk) => {
@@ -81,7 +91,7 @@ if (!self.name?.startsWith('em-pthread')) self.onmessage = (e: MessageEvent<ToLy
   if (msg.type === 'cancel') return;
   queue = queue.then(async () => {
     try {
-      const words = await transcribe(msg.audio16k, () => job !== currentJob);
+      const words = await transcribe(msg.audio16k, !!msg.cpuOnly, () => job !== currentJob);
       post({ type: 'done', words });
     } catch (err) {
       post({ type: 'error', message: err instanceof Error ? err.message : String(err) });

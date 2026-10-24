@@ -4,7 +4,7 @@ export type SeparatorModel = 'htdemucs' | 'roformer';
 
 export type ToSeparator =
   /** HTDemucs: all four stems. */
-  | { type: 'separate'; left: Float32Array; right: Float32Array }
+  | { type: 'separate'; left: Float32Array; right: Float32Array; cpuOnly?: boolean }
   /** Mel-Band RoFormer: high-quality vocals only. */
   | { type: 'vocals-hq'; left: Float32Array; right: Float32Array }
   | { type: 'cancel' };
