@@ -12,7 +12,7 @@ export const DEFAULT_STEM_PARAMS = {
   // Phrase and syllable defaults were tuned against hand-placed pumpkin effects in
   // fixtures/ThisIsHalloweenFilm.xsq (see tests/stems-eval.test.ts).
   vocalPhrases: { thresholdDb: 12, mergeGap: 0.2, minDur: 0.3 },
-  vocalSyllables: { thresholdDb: 18, sensitivity: 0.75, minDur: 0.15 },
+  vocalSyllables: { thresholdDb: 15, sensitivity: 0.85, minDur: 0.15 },
   otherAccents: { sensitivity: 0.3, minGap: 0.15 },
 } satisfies Record<string, Record<string, number>>;
 

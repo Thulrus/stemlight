@@ -1,6 +1,7 @@
 import type { Track } from '../core/types';
 import type { StemName } from '../separation/htdemucs';
 import type { MixParams } from './analyze';
+import type { AsrWord } from './lyrics';
 import type { StemParams } from './stems';
 
 export type AllParams = MixParams & StemParams;
@@ -10,6 +11,8 @@ export type ToWorker =
   | { type: 'analyze'; mono: Float32Array; sr: number; params: AllParams }
   /** Add (or replace) stems for the current song and analyze them. */
   | { type: 'stems'; stems: StemAudio; sr: number; params: AllParams }
+  /** Recognized words (Whisper); aligned to the vocal tracks on every run. */
+  | { type: 'lyrics'; words: AsrWord[]; params: AllParams }
   /** Re-run track builders on the cached features with new parameters (no reprocessing). */
   | { type: 'rerun'; params: AllParams };
 

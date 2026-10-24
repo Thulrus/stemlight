@@ -77,3 +77,15 @@ export function stemFromFileName(name: string): 'drums' | 'bass' | 'vocals' | 'o
   if (/\b(other|accompaniment|instrumental|music)\b/.test(n)) return 'other';
   return undefined;
 }
+
+/** Resample mono audio with an OfflineAudioContext (e.g. 22.05 kHz vocals to 16 kHz for Whisper). */
+export async function resample(x: Float32Array, from: number, to: number): Promise<Float32Array> {
+  const offline = new OfflineAudioContext(1, Math.ceil((x.length * to) / from), to);
+  const buf = offline.createBuffer(1, x.length, from);
+  buf.copyToChannel(x as Float32Array<ArrayBuffer>, 0);
+  const src = offline.createBufferSource();
+  src.buffer = buf;
+  src.connect(offline.destination);
+  src.start();
+  return (await offline.startRendering()).getChannelData(0).slice();
+}

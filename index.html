@@ -37,14 +37,25 @@
               <option value="25">25 ms</option>
             </select>
           </label>
-          <label class="field inline" title="Runs the HTDemucs model in your browser. Uses the GPU via WebGPU when available.">
-            <input id="opt-separate" type="checkbox" checked />
-            <span>Separate stems (drums, bass, vocals, other) <span class="muted">· 170 MB model, downloaded once</span></span>
-          </label>
+          <div class="option-group">
+            <label class="field inline" title="Runs the HTDemucs model in your browser. Uses the GPU via WebGPU when available.">
+              <input id="opt-separate" type="checkbox" checked />
+              <span>Separate stems (drums, bass, vocals, other) <span class="muted">· 170 MB model, downloaded once</span></span>
+            </label>
+            <label class="field inline sub" title="A second, vocals-only model (Mel-Band RoFormer) with much cleaner vocals. About 3× the work of the stem split, so it only runs on a GPU.">
+              <input id="opt-hq-vocals" type="checkbox" />
+              <span>High-quality vocals <span class="muted">· 464 MB model, needs a GPU (Chrome or Edge)</span></span>
+            </label>
+            <label class="field inline sub" title="Transcribes the vocals with Whisper and labels phrases and words with the lyrics. Timing comes from the vocal tracks; Whisper only supplies the words.">
+              <input id="opt-lyrics" type="checkbox" />
+              <span>Transcribe lyrics <span class="muted">· 250–320 MB model, best with a GPU</span></span>
+            </label>
+          </div>
         </div>
         <p class="muted small center">
           You get Sections, Phrases, Bars, Beats (1–4), Onsets and Energy tracks right away. With stems you also get
-          Vocal phrases and syllables, Kick, Snare, Hats, Bass notes and Other accents.
+          Vocal phrases and syllables, Kick, Snare, Hats, Bass notes and Other accents, and with lyrics on,
+          Lyric lines and Lyric words labeled with what's sung.
         </p>
       </section>
 
@@ -82,8 +93,14 @@
           <span id="stem-status-text"></span>
           <progress id="stem-progress" max="1" value="0" hidden></progress>
           <button id="stem-cancel" class="btn small" hidden>Cancel</button>
+          <span id="stem-hint" class="muted small stem-hint" hidden></span>
         </div>
         <p class="hint muted small">Scroll to pan, Ctrl/⌘ + scroll to zoom, click to seek. Turn on <span class="kbd">🎧</span> on a track to hear clicks on its marks while playing.</p>
+
+        <details id="lights-panel" class="lights-panel" open>
+          <summary>Light preview <span class="muted small">· one light per track checked for export</span></summary>
+          <div id="lights" class="lights"></div>
+        </details>
 
         <div class="timeline">
           <div id="lane-heads" class="lane-heads"></div>

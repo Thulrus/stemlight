@@ -1,22 +1,33 @@
 import { DEFAULT_PARAMS } from '../analysis/analyze';
 import type { AllParams, FromWorker, StemAudio, ToWorker } from '../analysis/protocol';
 import { DEFAULT_STEM_PARAMS } from '../analysis/stems';
-import { computePeaks, decodeFile, decodeMono, stemFromFileName, toStereo } from '../audio/decode';
+import { computePeaks, decodeFile, decodeMono, resample, stemFromFileName, toStereo } from '../audio/decode';
 import { Player } from '../audio/player';
 import { quantizeMarks, type MsMark } from '../core/quantize';
 import type { GridMs, Track } from '../core/types';
 import { ANALYSIS_SR } from '../dsp/features';
 import { fileSafeName, toXTiming } from '../export/xtiming';
 import { SAMPLE_RATE as SEPARATOR_SR, STEM_NAMES, type StemName } from '../separation/htdemucs';
-import { MODEL_TOTAL_BYTES } from '../separation/model';
 import type { FromSeparator, ToSeparator } from '../separation/protocol';
 import { hashBytes, idbGet, idbPut } from '../storage/idb';
+import type { AsrWord } from '../analysis/lyrics';
+import { WHISPER_BYTES, type FromLyrics, type ToLyrics } from '../lyrics/protocol';
 import { tracksToZip } from '../export/zip';
+import { LightPreview } from './lights';
 import { formatTime, LANE_H, RULER_H, Timeline, WAVE_H } from './timeline';
 
+const toInt16 = (x: Float32Array) => Int16Array.from(x, (v) => Math.round(Math.max(-1, Math.min(1, v)) * 32767));
+const fromInt16 = (x: Int16Array) => Float32Array.from(x, (v) => v / 32767);
+/** " · about 40 s left" once a rate is known. */
+function eta(since: number, done: number, total: number) {
+  if (!done) return '';
+  const left = Math.ceil((((performance.now() - since) / done) * (total - done)) / 1000);
+  return ` · about ${left >= 90 ? `${Math.round(left / 60)} min` : `${left} s`} left`;
+}
 const defaultParams = (): AllParams => structuredClone({ ...DEFAULT_PARAMS, ...DEFAULT_STEM_PARAMS });
 const STEM_LABEL: Record<StemName, string> = { drums: 'Drums', bass: 'Bass', vocals: 'Vocals', other: 'Other' };
-const STEM_CACHE_VERSION = 1;
+/** Bump a kind's version when its output changes, so stale cached results aren't reused. */
+const CACHE_VERSION = { stems: 1, 'vocals-hq': 1, lyrics: 2 } as const;
 
 /** Which parameter group feeds each generated track. */
 const PARAM_GROUP: Record<string, keyof AllParams> = {
@@ -98,10 +109,12 @@ export class App {
   private readonly player = new Player();
   private worker?: Worker;
   private timeline!: Timeline;
+  private lights!: LightPreview;
   private tracks: TrackState[] = [];
   private deleted = new Set<string>();
   private params: AllParams = defaultParams();
   private separator?: Worker;
+  private lyricsWorker?: Worker;
   private separating = false;
   /** Stems were sent for analysis and their tracks haven't arrived yet. */
   private stemsPending = false;
@@ -118,6 +131,10 @@ export class App {
 
   mount() {
     this.timeline = new Timeline($('#lane-canvas'));
+    this.lights = new LightPreview($('#lights'));
+    const panel = $<HTMLDetailsElement>('#lights-panel');
+    try { panel.open = localStorage.getItem('stemlight.lights') !== '0'; } catch { /* storage blocked */ }
+    panel.addEventListener('toggle', () => { try { localStorage.setItem('stemlight.lights', panel.open ? '1' : '0'); } catch { /* ignore */ } });
     this.timeline.onSeek = (t) => { this.player.seek(t); this.timeline.cursor = t; this.timeline.render(); this.updateTime(); };
     this.player.onEnded = () => this.updatePlayButton();
 
@@ -129,9 +146,21 @@ export class App {
     $('#export-zip').addEventListener('click', () => this.exportZip());
     $('#new-file').addEventListener('click', () => { this.cancelSeparation(); this.show('drop'); });
     $('#stem-cancel').addEventListener('click', () => this.cancelSeparation());
-    const sep = $<HTMLInputElement>('#opt-separate');
-    try { sep.checked = localStorage.getItem('stemlight.separate') !== '0'; } catch { /* storage blocked */ }
-    sep.addEventListener('change', () => { try { localStorage.setItem('stemlight.separate', sep.checked ? '1' : '0'); } catch { /* ignore */ } });
+    // Remember the processing options per browser.
+    const options: [string, string, boolean][] = [['#opt-separate', 'separate', true], ['#opt-hq-vocals', 'hqVocals', false], ['#opt-lyrics', 'lyrics', false]];
+    const syncSubOptions = () => {
+      const on = $<HTMLInputElement>('#opt-separate').checked;
+      for (const sel of ['#opt-hq-vocals', '#opt-lyrics']) $<HTMLInputElement>(sel).disabled = !on;
+    };
+    for (const [sel, key, def] of options) {
+      const box = $<HTMLInputElement>(sel);
+      try { const v = localStorage.getItem(`stemlight.${key}`); box.checked = v === null ? def : v === '1'; } catch { /* storage blocked */ }
+      box.addEventListener('change', () => {
+        try { localStorage.setItem(`stemlight.${key}`, box.checked ? '1' : '0'); } catch { /* ignore */ }
+        syncSubOptions();
+      });
+    }
+    syncSubOptions();
     this.tick();
   }
 
@@ -208,77 +237,190 @@ export class App {
       this.params = defaultParams();
       this.progress('Analyzing', 0.1);
       this.send({ type: 'analyze', mono, sr: ANALYSIS_SR, params: this.params }, [mono.buffer]);
-      if (supplied.size) void this.loadSuppliedStems(supplied, id);
-      else if (this.wantStems) void this.loadOrSeparateStems(buffer, id);
+      if (supplied.size || this.wantStems) void this.stemPipeline(buffer, supplied, id);
     } catch (err) {
       this.fail(err instanceof Error ? `Could not decode this file: ${err.message}` : 'Could not decode this file.');
     }
   }
 
-  // ---- stems -------------------------------------------------------------------
+  // ---- stems, high-quality vocals, lyrics ------------------------------------------
 
-  private async loadSuppliedStems(files: Map<StemName, File>, id: number) {
-    this.setStemStatus(`Decoding ${files.size} stem file${files.size > 1 ? 's' : ''}…`);
-    try {
-      const stems: StemAudio = {};
-      for (const [name, f] of files) stems[name] = await decodeMono(f, this.player.ctx, ANALYSIS_SR);
-      if (id === this.loadId) this.useStems(stems, 'your stem files');
-    } catch (err) {
-      this.setStemStatus(`Could not decode the stem files: ${err instanceof Error ? err.message : err}`, true);
-    }
+  private cacheKey(kind: keyof typeof CACHE_VERSION, variant = '') {
+    return `${kind}:v${CACHE_VERSION[kind]}:${this.fileHash}${variant ? ':' + variant : ''}`;
   }
 
-  private stemCacheKey() {
-    return `stems:v${STEM_CACHE_VERSION}:${this.fileHash}`;
-  }
-
-  private async loadOrSeparateStems(buffer: AudioBuffer, id: number) {
-    const cached = await idbGet<Record<string, Int16Array>>(this.stemCacheKey());
-    if (id !== this.loadId) return;
-    if (cached) {
-      const stems: StemAudio = {};
-      for (const n of STEM_NAMES) if (cached[n]) stems[n] = Float32Array.from(cached[n], (v) => v / 32767);
-      this.useStems(stems, 'cache');
-      return;
-    }
+  /**
+   * Everything after the mix analysis, in the background: stems (user files, cache or HTDemucs),
+   * then optionally Mel-Band RoFormer vocals, then optionally Whisper lyrics on the best vocals.
+   * Each stage adds or refines tracks as it finishes.
+   */
+  private async stemPipeline(buffer: AudioBuffer, supplied: Map<StemName, File>, id: number) {
+    const wantHq = $<HTMLInputElement>('#opt-hq-vocals').checked;
+    const wantLyrics = $<HTMLInputElement>('#opt-lyrics').checked;
+    const live = () => id === this.loadId;
+    let stereo: { left: Float32Array; right: Float32Array } | undefined;
+    const getStereo = async () => (stereo ??= await toStereo(buffer, SEPARATOR_SR));
+    const notes: string[] = [];
     this.separating = true;
-    this.setStemStatus('Preparing stem separation…', false, true);
-    const { left, right } = await toStereo(buffer, SEPARATOR_SR);
-    if (id !== this.loadId) return;
-    const started = performance.now();
+    try {
+      // 1. Stems.
+      let stems: StemAudio;
+      if (supplied.size) {
+        this.setStemStatus(`Decoding ${supplied.size} stem file${supplied.size > 1 ? 's' : ''}…`, false, true);
+        stems = {};
+        for (const [name, f] of supplied) stems[name] = await decodeMono(f, this.player.ctx, ANALYSIS_SR);
+      } else {
+        const cached = await idbGet<Record<string, Int16Array>>(this.cacheKey('stems'));
+        if (cached) {
+          stems = {};
+          for (const n of STEM_NAMES) if (cached[n]) stems[n] = fromInt16(cached[n]);
+        } else {
+          this.setStemStatus('Preparing stem separation…', false, true);
+          const { left, right } = await getStereo();
+          const m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice() }, 'Separating stems', live);
+          if (m.type !== 'done') return;
+          stems = m.stems;
+          void idbPut(this.cacheKey('stems'), Object.fromEntries(STEM_NAMES.map((n) => [n, toInt16(m.stems[n])])));
+        }
+      }
+      if (!live()) return;
+      this.useStems(stems, 'stems');
+      let vocals = stems.vocals;
+      let vocalsVariant = 'htdemucs';
+
+      // 2. High-quality vocals (GPU only).
+      if (wantHq && !supplied.has('vocals') && vocals) {
+        const cached = await idbGet<Int16Array>(this.cacheKey('vocals-hq'));
+        let hq: Float32Array | undefined = cached ? fromInt16(cached) : undefined;
+        if (!hq) {
+          this.setStemStatus('Preparing high-quality vocals…', false, true);
+          const { left, right } = await getStereo();
+          try {
+            const m = await this.separatorJob({ type: 'vocals-hq', left: left.slice(), right: right.slice() }, 'Separating high-quality vocals', live);
+            if (m.type === 'vocals-hq') {
+              hq = m.vocals;
+              void idbPut(this.cacheKey('vocals-hq'), toInt16(hq));
+            }
+          } catch (err) {
+            if (err instanceof Error && err.message === 'needs-gpu') notes.push('High-quality vocals need a GPU (WebGPU), so the standard vocals were used.');
+            else throw err;
+          }
+        }
+        if (!live()) return;
+        if (hq) {
+          vocals = hq;
+          vocalsVariant = 'roformer';
+          this.useStems({ vocals: hq }, 'high-quality vocals');
+        }
+      }
+
+      // The separation models hold several hundred MB; free them before Whisper loads.
+      // (They reload from the IndexedDB cache in seconds for the next song.)
+      this.separator?.terminate();
+      this.separator = undefined;
+
+      // 3. Lyrics.
+      if (wantLyrics && vocals) {
+        const key = this.cacheKey('lyrics', vocalsVariant);
+        let words = await idbGet<AsrWord[]>(key);
+        if (!words) {
+          this.setStemStatus('Preparing lyrics transcription…', false, true);
+          words = await this.lyricsJob(await resample(vocals, ANALYSIS_SR, 16000), live);
+          if (words) void idbPut(key, words);
+        }
+        if (!live()) return;
+        if (!words) throw new Error('no lyrics were returned');
+        this.stemsPending = true;
+        this.send({ type: 'lyrics', words, params: this.params });
+      }
+      this.separating = false;
+      this.setStemStatus(notes.join(' '), false);
+    } catch (err) {
+      this.separating = false;
+      if (/crashed/.test(String(err))) {
+        this.lyricsWorker?.terminate();
+        this.lyricsWorker = undefined;
+      }
+      if (!live()) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      this.setStemStatus(msg === 'cancelled' ? 'Cancelled.' : `Something went wrong: ${msg}`, msg !== 'cancelled');
+    }
+  }
+
+  /** Run one separator job, mirroring its progress in the banner. */
+  private separatorJob(msg: ToSeparator, label: string, live: () => boolean): Promise<FromSeparator> {
+    this.separator ??= new Worker(new URL('../separation/worker.ts', import.meta.url), { type: 'module' });
+    const worker = this.separator;
     let segStart = 0;
     let backend = '';
-    this.separator ??= new Worker(new URL('../separation/worker.ts', import.meta.url), { type: 'module' });
-    this.separator.onmessage = (e: MessageEvent<FromSeparator>) => {
-      if (id !== this.loadId) return;
-      const m = e.data;
-      if (m.type === 'download') {
-        const mb = (n: number) => (n / 1e6).toFixed(0);
-        this.setStemStatus(m.cached ? 'Loading the separation model…' : `Downloading the separation model (one time): ${mb(m.loaded)} / ${mb(MODEL_TOTAL_BYTES)} MB`, false, true, m.loaded / m.total);
-      } else if (m.type === 'backend') {
-        backend = m.backend === 'webgpu' ? 'GPU' : `CPU, ${m.threads} thread${m.threads > 1 ? 's' : ''}`;
-        segStart = performance.now();
-      } else if (m.type === 'segment') {
-        const per = m.done ? (performance.now() - segStart) / m.done : 0;
-        const left = per ? Math.ceil((per * (m.total - m.done)) / 1000) : 0;
-        const eta = m.done ? ` · about ${left >= 90 ? `${Math.round(left / 60)} min` : `${left} s`} left` : '';
-        this.setStemStatus(`Separating stems (${backend}): ${m.done} / ${m.total}${eta}`, false, true, m.done / m.total);
-      } else if (m.type === 'done') {
-        this.separating = false;
-        console.info(`Stem separation took ${((performance.now() - started) / 1000).toFixed(1)} s on ${backend}`);
-        const toCache = Object.fromEntries(STEM_NAMES.map((n) => [n, Int16Array.from(m.stems[n], (v) => Math.round(Math.max(-1, Math.min(1, v)) * 32767))]));
-        void idbPut(this.stemCacheKey(), toCache);
-        this.useStems(m.stems, 'separation');
-      } else if (m.type === 'error') {
-        this.separating = false;
-        this.setStemStatus(m.message === 'cancelled' ? 'Stem separation cancelled.' : `Stem separation failed: ${m.message}`, m.message !== 'cancelled');
-      }
-    };
-    this.separator.postMessage({ type: 'separate', left, right } satisfies ToSeparator, [left.buffer, right.buffer]);
+    return new Promise((resolve, reject) => {
+      worker.onmessage = (e: MessageEvent<FromSeparator>) => {
+        if (!live()) return;
+        const m = e.data;
+        if (m.type === 'download') {
+          const mb = (n: number) => (n / 1e6).toFixed(0);
+          const what = m.model === 'roformer' ? 'high-quality vocal model' : 'separation model';
+          this.setStemStatus(m.cached ? `Loading the ${what}…` : `Downloading the ${what} (one time): ${mb(m.loaded)} / ${mb(m.total)} MB`, false, true, m.loaded / m.total);
+        } else if (m.type === 'backend') {
+          backend = m.backend === 'webgpu' ? 'GPU' : `CPU, ${m.threads} thread${m.threads > 1 ? 's' : ''}`;
+          this.showCpuHint(m.backend === 'wasm');
+          segStart = performance.now();
+        } else if (m.type === 'segment') {
+          this.setStemStatus(`${label} (${backend}): ${m.done} / ${m.total}${eta(segStart, m.done, m.total)}`, false, true, m.done / m.total);
+        } else if (m.type === 'error') {
+          reject(new Error(m.message));
+        } else {
+          resolve(m);
+        }
+      };
+      worker.onerror = (e) => { e.preventDefault(); reject(new Error(e.message || 'the separation worker crashed (possibly out of memory)')); };
+      const transfer = 'left' in msg ? [msg.left.buffer, msg.right.buffer] : [];
+      worker.postMessage(msg, transfer);
+    });
+  }
+
+  /** Transcribe vocals (16 kHz mono) with Whisper, mirroring progress in the banner. */
+  private lyricsJob(audio16k: Float32Array, live: () => boolean): Promise<AsrWord[] | undefined> {
+    this.lyricsWorker ??= new Worker(new URL('../lyrics/worker.ts', import.meta.url), { type: 'module' });
+    const worker = this.lyricsWorker;
+    let start = 0;
+    let backend = '';
+    return new Promise((resolve, reject) => {
+      worker.onmessage = (e: MessageEvent<FromLyrics>) => {
+        if (!live()) return resolve(undefined);
+        const m = e.data;
+        if (m.type === 'download') {
+          const mb = (n: number) => (n / 1e6).toFixed(0);
+          this.setStemStatus(`Downloading the lyrics model (one time): ${mb(m.loaded)} / ${mb(Math.max(m.total, WHISPER_BYTES))} MB`, false, true, m.loaded / Math.max(m.total, WHISPER_BYTES));
+        } else if (m.type === 'backend') {
+          backend = m.backend === 'webgpu' ? 'GPU' : 'CPU';
+          this.showCpuHint(m.backend === 'wasm');
+          start = performance.now();
+        } else if (m.type === 'progress') {
+          this.setStemStatus(`Transcribing lyrics (${backend}): ${m.done} / ${m.total}${eta(start, m.done, m.total)}`, false, true, m.done / m.total);
+        } else if (m.type === 'error') {
+          reject(new Error(m.message));
+        } else {
+          resolve(m.words);
+        }
+      };
+      worker.onerror = (e) => { e.preventDefault(); reject(new Error(e.message || 'the lyrics worker crashed (possibly out of memory)')); };
+      worker.postMessage({ type: 'transcribe', audio16k } satisfies ToLyrics, [audio16k.buffer]);
+    });
+  }
+
+  private showCpuHint(onCpu: boolean) {
+    $('#stem-hint').hidden = !onCpu;
+    $('#stem-hint').textContent = /firefox/i.test(navigator.userAgent)
+      ? 'Firefox doesn’t offer WebGPU on this system yet, so this runs on the CPU. Chrome or Edge can use your GPU, which is several times faster.'
+      : 'No usable GPU (WebGPU) was found, so this runs on the CPU. It still works, just slower.';
   }
 
   private cancelSeparation() {
-    if (this.separating) this.separator?.postMessage({ type: 'cancel' } satisfies ToSeparator);
+    if (this.separating) {
+      this.separator?.postMessage({ type: 'cancel' } satisfies ToSeparator);
+      this.lyricsWorker?.postMessage({ type: 'cancel' } satisfies ToLyrics);
+    }
     this.separating = false;
   }
 
@@ -287,7 +429,7 @@ export class App {
     this.renderStemStrip();
     const names = (Object.keys(stems) as StemName[]).map((n) => STEM_LABEL[n].toLowerCase());
     this.stemsPending = true;
-    this.setStemStatus(`Analyzing stems from ${from}: ${names.join(', ')}…`, false, true);
+    this.setStemStatus(`Analyzing ${from === 'stems' ? 'stems' : from}: ${names.join(', ')}…`, false, true);
     const copy: StemAudio = {};
     for (const [k, v] of Object.entries(stems)) copy[k as StemName] = v.slice();
     this.send({ type: 'stems', stems: copy, sr: ANALYSIS_SR, params: this.params }, Object.values(copy).map((v) => v.buffer));
@@ -296,6 +438,7 @@ export class App {
   /** The banner above the timeline. No text hides it. */
   private setStemStatus(text = '', error = false, busy = false, fraction?: number) {
     const box = $('#stem-status');
+    if (!busy) $('#stem-hint').hidden = true;
     box.hidden = !text;
     box.classList.toggle('error', error);
     $('#stem-status-text').textContent = text;
@@ -349,8 +492,11 @@ export class App {
       const n = msg.tracks.filter((t) => t.source !== 'mix').length;
       if (this.stemsPending && n) {
         this.stemsPending = false;
-        this.setStemStatus(`Added ${n} instrument tracks from the stems.`);
-        setTimeout(() => { if (!this.separating && !this.stemsPending) this.setStemStatus(); }, 4000);
+        if (!this.separating && !$('#stem-status').classList.contains('error')) {
+          const lyrics = msg.tracks.some((t) => t.id === 'vocals-lyric-words');
+          this.setStemStatus(`Added ${n} instrument${lyrics ? ' and lyric' : ''} tracks from the stems.`);
+          setTimeout(() => { if (!this.separating && !this.stemsPending) this.setStemStatus(); }, 4000);
+        }
       }
       $('#file-name').textContent = this.fileName;
       $('#file-meta').textContent = `${formatTime(msg.duration)} · ${msg.bpm.toFixed(1)} BPM`;
@@ -418,6 +564,7 @@ export class App {
   }
 
   private tick = () => {
+    this.lights.render(this.player.currentTime);
     if (this.player.isPlaying) {
       const t = this.player.currentTime;
       this.timeline.cursor = t;
@@ -446,6 +593,15 @@ export class App {
   /** Re-render lanes, headers, inspector and audition after any change. */
   private refresh() {
     this.timeline.lanes = this.tracks.map((s) => ({ id: s.track.id, marks: this.quantized(s), hue: s.hue, selected: s.track.id === this.selectedId }));
+    this.lights.setChannels(this.tracks.flatMap((s, i) => {
+      if (!s.include) return [];
+      const marks = this.timeline.lanes[i].marks;
+      const durs = marks.map((m) => m.end - m.start).sort((a, b) => a - b);
+      // Back-to-back spans (beats, bars, sections) would just stay lit; flash at each boundary instead.
+      const touching = marks.filter((m, j) => j > 0 && m.start === marks[j - 1].end).length;
+      const isPoint = (durs[durs.length >> 1] ?? 0) <= this.gridMs * 1.5 || touching > 0.8 * (marks.length - 1);
+      return [{ id: s.track.id, name: s.track.name, hue: s.hue, marks, isPoint }];
+    }));
     this.timeline.render();
     this.renderHeads();
     this.renderInspector();
@@ -468,7 +624,7 @@ export class App {
       const include = el('input', { type: 'checkbox', checked: s.include, title: 'Include in export' });
       include.setAttribute('aria-label', `Export ${s.track.name}`);
       include.addEventListener('click', (e) => e.stopPropagation());
-      include.addEventListener('change', () => { s.include = include.checked; this.renderExport(); });
+      include.addEventListener('change', () => { s.include = include.checked; this.refresh(); });
       const audition = el('button', { class: `icon-btn audition${this.auditionId === id ? ' on' : ''}`, title: 'Audition: click on this track while playing', innerHTML: ICONS.headphones });
       audition.setAttribute('aria-pressed', String(this.auditionId === id));
       audition.setAttribute('aria-label', `Audition ${s.track.name}`);
