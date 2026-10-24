@@ -22,3 +22,10 @@ export function isGpuMemoryError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /OUT_OF_DEVICE_MEMORY|out of memory|Invalid (Command)?Buffer|WebGPU validation failed|device (was )?lost/i.test(msg);
 }
+
+/** Whether the GPU can run fp16 shaders (WebGPU "shader-f16"), which fp16 models need. */
+export async function gpuHasF16(): Promise<boolean> {
+  if (!('gpu' in navigator)) return false;
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null);
+  return !!adapter?.features.has('shader-f16');
+}

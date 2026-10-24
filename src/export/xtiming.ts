@@ -17,14 +17,16 @@ export function escapeXmlAttr(s: string): string {
 
 function timingElement(track: Track, opts: ExportOptions): string {
   const version = opts.sourceVersion ?? XLIGHTS_SOURCE_VERSION;
-  const marks = quantizeMarks(track.marks, opts.gridMs, opts.durationSec);
-  const lines = [
-    `<timing name="${escapeXmlAttr(track.name)}" subType="" SourceVersion="${escapeXmlAttr(version)}">`,
+  const layer = (marks: Track['marks']) => [
     '   <EffectLayer>',
-    ...marks.map(
+    ...quantizeMarks(marks, opts.gridMs, opts.durationSec).map(
       (m) => `      <Effect label="${escapeXmlAttr(m.label)}" starttime="${m.start}" endtime="${m.end}" />`,
     ),
     '   </EffectLayer>',
+  ];
+  const lines = [
+    `<timing name="${escapeXmlAttr(track.name)}" subType="" SourceVersion="${escapeXmlAttr(version)}">`,
+    ...[track.marks, ...(track.layers ?? [])].flatMap(layer),
     '</timing>',
   ];
   return lines.join('\n');

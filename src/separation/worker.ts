@@ -1,10 +1,13 @@
 /// <reference lib="webworker" />
 import * as ort from 'onnxruntime-web/webgpu';
 import { hashBytes, idbGet, idbPut } from '../storage/idb';
-import { hasRealGpu, isGpuMemoryError } from './gpu';
-import { HTDEMUCS_FILES, MODEL_CACHE_KEY, ROFORMER_FILE, type ModelFile } from './model';
+import { gpuHasF16, hasRealGpu, isGpuMemoryError } from './gpu';
+import { ctcEmissions } from '../align/acoustic';
+import { basicPitchFrames } from '../notes/basicPitch';
+import basicPitchUrl from '../notes/basic-pitch.onnx?url';
+import { ALIGNER_FILES, HTDEMUCS_FILES, LEAD_FILE, MODEL_CACHE_KEY, ROFORMER_FILE, type ModelFile } from './model';
 import type { FromSeparator, SeparatorModel, ToSeparator } from './protocol';
-import { separateVocalsRoformer } from './roformer';
+import { LEAD_MODEL, separateRoformer, VOCALS_MODEL } from './roformer';
 import { separate } from './separate';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -95,11 +98,20 @@ async function getSession(model: SeparatorModel, cpuOnly = false): Promise<ort.I
       graphOptimizationLevel: 'all',
       externalData: [{ path: HTDEMUCS_FILES[1].name, data }],
     }, false, cpuOnly);
+  } else if (model === 'notes') {
+    // Basic Pitch is tiny (230 KB) and ships with the app; the CPU is plenty.
+    const graph = new Uint8Array(await (await fetch(basicPitchUrl)).arrayBuffer());
+    sessions.notes = await createSession(model, graph, { graphOptimizationLevel: 'all' }, false, true);
+  } else if (model === 'aligner') {
+    // Small enough for the CPU too. fp16 needs a GPU with fp16 shaders; fp32 runs anywhere.
+    const f16 = !cpuOnly && (await hasRealGpu()) && (await gpuHasF16());
+    const [graph] = await loadFiles(model, [ALIGNER_FILES[f16 ? 'fp16' : 'fp32']]);
+    sessions.aligner = await createSession(model, graph, { graphOptimizationLevel: 'all' }, false, cpuOnly);
   } else {
-    // RoFormer is ~3x HTDemucs's compute: fine on a GPU, impractically slow on CPU.
+    // RoFormers are ~3x HTDemucs's compute: fine on a GPU, impractically slow on CPU.
     if (!(await hasRealGpu())) throw new Error('needs-gpu');
-    const [graph] = await loadFiles(model, [ROFORMER_FILE]);
-    sessions.roformer = await createSession(model, graph, { graphOptimizationLevel: 'all' }, true);
+    const [graph] = await loadFiles(model, [model === 'lead' ? LEAD_FILE : ROFORMER_FILE]);
+    sessions[model] = await createSession(model, graph, { graphOptimizationLevel: 'all' }, true);
   }
   return sessions[model]!;
 }
@@ -128,17 +140,33 @@ if (!isOrtThread) self.onmessage = (e: MessageEvent<ToSeparator>) => {
           throw err;
         }
         post({ type: 'done', stems }, Object.values(stems).map((x) => x.buffer));
-      } else {
+      } else if (msg.type === 'notes') {
+        const s = await getSession('notes');
+        const frames = await basicPitchFrames(s, ort.Tensor, msg.audio, (done, total) => post({ type: 'segment', model: 'notes', done, total }), cancelled);
+        post({ type: 'notes', frames }, [frames.note.buffer, frames.onset.buffer, frames.times.buffer]);
+      } else if (msg.type === 'emissions') {
         try {
-          const s = await getSession('roformer');
-          const vocals = await separateVocalsRoformer(s, ort.Tensor, msg.left, msg.right, (done, total) => post({ type: 'segment', model: 'roformer', done, total }), cancelled);
-          post({ type: 'vocals-hq', vocals }, [vocals.buffer]);
+          const s = await getSession('aligner', !!msg.cpuOnly);
+          const emissions = await ctcEmissions(s, ort.Tensor, msg.audio16k, (done, total) => post({ type: 'segment', model: 'aligner', done, total }), cancelled);
+          post({ type: 'emissions', emissions }, [emissions.logp.buffer]);
+        } catch (err) {
+          if (isGpuMemoryError(err)) throw new Error('needs-gpu-memory');
+          throw err;
+        } finally {
+          await release('aligner');
+        }
+      } else {
+        const model = msg.type === 'lead' ? 'lead' : 'roformer';
+        try {
+          const s = await getSession(model);
+          const stem = await separateRoformer(model === 'lead' ? LEAD_MODEL : VOCALS_MODEL, s, ort.Tensor, msg.left, msg.right, (done, total) => post({ type: 'segment', model, done, total }), cancelled);
+          post(msg.type === 'lead' ? { type: 'lead', lead: stem } : { type: 'vocals-hq', vocals: stem }, [stem.buffer]);
         } catch (err) {
           if (!isGpuMemoryError(err)) throw err;
-          console.warn('[separator] GPU ran out of memory for high-quality vocals', err);
+          console.warn(`[separator] GPU ran out of memory for ${model}`, err);
           throw new Error('needs-gpu-memory');
         } finally {
-          await release('roformer');
+          await release(model);
         }
       }
     } catch (err) {

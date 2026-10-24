@@ -13,11 +13,20 @@ import { hashBytes, idbGet, idbPut } from '../storage/idb';
 import type { AsrWord } from '../analysis/lyrics';
 import { WHISPER_BYTES, type FromLyrics, type ToLyrics } from '../lyrics/protocol';
 import { tracksToZip } from '../export/zip';
+import { gunzipSync, strFromU8 } from 'fflate';
+import type { WordHint } from '../align/align';
+import type { Emissions } from '../align/ctc';
+import { parseLyrics, type LyricWord } from '../align/text';
+import { wordsFromAsr } from '../analysis/lyricTracks';
+import { W2V_SR } from '../align/acoustic';
 import { LightPreview } from './lights';
 import { formatTime, LANE_H, RULER_H, Timeline, WAVE_H } from './timeline';
 
 const toInt16 = (x: Float32Array) => Int16Array.from(x, (v) => Math.round(Math.max(-1, Math.min(1, v)) * 32767));
 const fromInt16 = (x: Int16Array) => Float32Array.from(x, (v) => v / 32767);
+/** Lyric words back to text, one lyric line per line (for editing Whisper's transcript). */
+const lyricLines = (words: LyricWord[]) =>
+  words.reduce<string[][]>((lines, w) => ((lines[w.line] ??= []).push(w.text), lines), []).filter(Boolean).map((l) => l.join(' ')).join('\n');
 /** " · about 40 s left" once a rate is known. */
 function eta(since: number, done: number, total: number) {
   if (!done) return '';
@@ -27,7 +36,7 @@ function eta(since: number, done: number, total: number) {
 const defaultParams = (): AllParams => structuredClone({ ...DEFAULT_PARAMS, ...DEFAULT_STEM_PARAMS });
 const STEM_LABEL: Record<StemName, string> = { drums: 'Drums', bass: 'Bass', vocals: 'Vocals', other: 'Other' };
 /** Bump a kind's version when its output changes, so stale cached results aren't reused. */
-const CACHE_VERSION = { stems: 1, 'vocals-hq': 1, lyrics: 2 } as const;
+const CACHE_VERSION = { stems: 1, 'vocals-hq': 1, lead: 1, lyrics: 2, emissions: 2 } as const;
 
 /** Which parameter group feeds each generated track. */
 const PARAM_GROUP: Record<string, keyof AllParams> = {
@@ -35,6 +44,8 @@ const PARAM_GROUP: Record<string, keyof AllParams> = {
   'mix-sections': 'sections', 'mix-phrases': 'phrases', 'mix-energy': 'energy',
   'drums-kick': 'kick', 'drums-snare': 'snare', 'drums-hats': 'hats', 'bass-notes': 'bassNotes',
   'vocals-phrases': 'vocalPhrases', 'vocals-syllables': 'vocalSyllables', 'other-accents': 'otherAccents',
+  'other-lead': 'otherNotes', 'other-notes': 'otherNotes', 'vocals-notes': 'otherNotes', 'vocals-backing': 'vocalPhrases', 'vocals-lyric-lines': 'lyrics', 'vocals-lyric-words': 'lyrics',
+  'vocals-lyric-syllables': 'lyrics', 'vocals-lyrics': 'lyrics',
 };
 
 type Range = { label: string; min: number; max: number; step: number; hint: string };
@@ -60,6 +71,16 @@ const PARAM_RANGES: Record<keyof AllParams, Record<string, Range>> = {
     minDur: { label: 'Shortest syllable (s)', min: 0.05, max: 0.5, step: 0.01, hint: 'Syllables shorter than this are merged.' },
   },
   otherAccents: { sensitivity: sensitivity('Higher finds more, softer accents in guitars, keys, strings and horns.'), minGap },
+  otherNotes: {
+    onsetThresh: { label: 'Onset threshold', min: 0.1, max: 0.9, step: 0.05, hint: 'Lower finds more, softer note starts.' },
+    frameThresh: { label: 'Sustain threshold', min: 0.1, max: 0.9, step: 0.05, hint: 'Lower lets notes ring longer.' },
+    minNote: { label: 'Shortest note (s)', min: 0.03, max: 0.5, step: 0.01, hint: 'Shorter notes are dropped.' },
+  },
+  lyrics: {
+    offsetMs: { label: 'Offset (ms)', min: -200, max: 200, step: 10, hint: 'Shifts every word, syllable and phoneme start earlier (−) or later (+).' },
+    decayDb: { label: 'Release (dB)', min: 6, max: 30, step: 1, hint: 'A held word ends when the voice fades this far below its peak; higher holds longer.' },
+    maxHold: { label: 'Longest hold (s)', min: 0.2, max: 5, step: 0.1, hint: 'How long a word may be held after its last letter.' },
+  },
   beats: {
     priorBpm: { label: 'Tempo guess (BPM)', min: 60, max: 200, step: 1, hint: 'Biases the tempo search; change it if beats are double or half speed.' },
     tightness: { label: 'Tightness', min: 20, max: 400, step: 10, hint: 'Higher keeps beats evenly spaced; lower follows the music more loosely.' },
@@ -130,6 +151,15 @@ export class App {
   private duration = 0;
   private hueSeed = 0;
   private rerunTimer?: number;
+  /** The aligner's output for this song's (best) vocals, kept so edited lyrics re-align instantly. */
+  private emissions?: Emissions;
+  /** The lyrics last aligned, as text (pasted, or Whisper's transcript one line per lyric line). */
+  private lyricsText = '';
+  private pronSent = false;
+  /** The vocals lyrics align to: all vocals, plus the lead alone when separated. */
+  private alignSources: { audio: Float32Array; variant: string }[] = [];
+  /** The lead vocal's emissions, fused with the full vocals' (see fuseEmissions). */
+  private leadEmissions?: Emissions;
 
   mount() {
     this.timeline = new Timeline($('#lane-canvas'));
@@ -148,11 +178,16 @@ export class App {
     $('#export-zip').addEventListener('click', () => this.exportZip());
     $('#new-file').addEventListener('click', () => { this.cancelSeparation(); this.show('drop'); });
     $('#stem-cancel').addEventListener('click', () => this.cancelSeparation());
+    $('#edit-lyrics').addEventListener('click', () => this.openLyricsDialog());
+    $<HTMLDialogElement>('#lyrics-dialog').addEventListener('close', () => {
+      const dlg = $<HTMLDialogElement>('#lyrics-dialog');
+      if (dlg.returnValue === 'align') void this.realign($<HTMLTextAreaElement>('#lyrics-edit').value);
+    });
     // Remember the processing options per browser.
-    const options: [string, string, boolean][] = [['#opt-separate', 'separate', true], ['#opt-hq-vocals', 'hqVocals', false], ['#opt-lyrics', 'lyrics', false]];
+    const options: [string, string, boolean][] = [['#opt-separate', 'separate', true], ['#opt-hq-vocals', 'hqVocals', false], ['#opt-lead', 'lead', false], ['#opt-align', 'align', true], ['#opt-lyrics', 'lyrics', false]];
     const syncSubOptions = () => {
       const on = $<HTMLInputElement>('#opt-separate').checked;
-      for (const sel of ['#opt-hq-vocals', '#opt-lyrics']) $<HTMLInputElement>(sel).disabled = !on;
+      for (const sel of ['#opt-hq-vocals', '#opt-lead', '#opt-align', '#opt-lyrics']) $<HTMLInputElement>(sel).disabled = !on;
     };
     for (const [sel, key, def] of options) {
       const box = $<HTMLInputElement>(sel);
@@ -237,6 +272,9 @@ export class App {
       this.selectedId = undefined;
       this.auditionId = 'mix-beats';
       this.params = defaultParams();
+      this.emissions = this.leadEmissions = undefined;
+      this.alignSources = [];
+      this.lyricsText = $<HTMLTextAreaElement>('#lyrics-text').value.trim();
       this.progress('Analyzing', 0.1);
       this.send({ type: 'analyze', mono, sr: ANALYSIS_SR, params: this.params }, [mono.buffer]);
       if (supplied.size || this.wantStems) void this.stemPipeline(buffer, supplied, id);
@@ -259,6 +297,8 @@ export class App {
   private async stemPipeline(buffer: AudioBuffer, supplied: Map<StemName, File>, id: number) {
     const wantHq = $<HTMLInputElement>('#opt-hq-vocals').checked;
     const wantLyrics = $<HTMLInputElement>('#opt-lyrics').checked;
+    const wantLead = $<HTMLInputElement>('#opt-lead').checked;
+    const wantAlign = $<HTMLInputElement>('#opt-align').checked;
     const live = () => id === this.loadId;
     let stereo: { left: Float32Array; right: Float32Array } | undefined;
     const getStereo = async () => (stereo ??= await toStereo(buffer, SEPARATOR_SR));
@@ -286,8 +326,7 @@ export class App {
           } catch (err) {
             if (!(err instanceof Error && err.message === 'needs-gpu-memory')) throw err;
             // Out of GPU memory: start over on the CPU in a fresh worker.
-            this.separator?.terminate();
-            this.separator = undefined;
+            this.freeSeparator();
             notes.push('The GPU ran out of memory, so stems were separated on the CPU. Closing other GPU-heavy tabs or apps can help.');
             m = await this.separatorJob({ type: 'separate', left: left.slice(), right: right.slice(), cpuOnly: true }, 'Separating stems', live);
           }
@@ -298,8 +337,22 @@ export class App {
       }
       if (!live()) return;
       this.useStems(stems, 'stems');
+      // Notes in guitars, keys and the like, and the sung melody (Basic Pitch, small and quick
+      // even on the CPU).
+      for (const stem of ['other', 'vocals'] as const) {
+        const audio = stems[stem];
+        if (!audio) continue;
+        const m = await this.separatorJob({ type: 'notes', audio: audio.slice() }, stem === 'other' ? 'Finding notes' : 'Finding the vocal melody', live);
+        if (!live()) return;
+        if (m.type === 'notes') {
+          this.stemsPending = true;
+          this.send({ type: 'pitch', stem, frames: m.frames, params: this.params }, [m.frames.note.buffer, m.frames.onset.buffer, m.frames.times.buffer]);
+        }
+      }
       let vocals = stems.vocals;
       let vocalsVariant = 'htdemucs';
+      /** The lead singer alone, when separated: aligned together with the full vocals. */
+      let leadVocals: Float32Array | undefined;
 
       // 2. High-quality vocals (GPU only).
       if (wantHq && !supplied.has('vocals') && vocals) {
@@ -328,13 +381,48 @@ export class App {
         }
       }
 
+      // 3. Lead vocals without the backing vocals (GPU only).
+      if (wantLead && !supplied.has('vocals') && vocals) {
+        const cached = await idbGet<Int16Array>(this.cacheKey('lead'));
+        let lead: Float32Array | undefined = cached ? fromInt16(cached) : undefined;
+        if (!lead) {
+          this.setStemStatus('Preparing lead vocal separation…', false, true);
+          const { left, right } = await getStereo();
+          try {
+            const m = await this.separatorJob({ type: 'lead', left: left.slice(), right: right.slice() }, 'Separating lead vocals', live);
+            if (m.type === 'lead') {
+              lead = m.lead;
+              void idbPut(this.cacheKey('lead'), toInt16(lead));
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg === 'cancelled') throw err;
+            if (msg === 'needs-gpu') notes.push('Separating lead and backing vocals needs a GPU (WebGPU), so it was skipped.');
+            else if (msg === 'needs-gpu-memory') notes.push('There wasn’t enough free GPU memory to separate lead and backing vocals. Closing other GPU-heavy tabs or apps can help.');
+            else {
+              // E.g. the model couldn't be downloaded: the rest of the pipeline doesn't need it.
+              console.warn('[separator] lead vocals failed', err);
+              notes.push(`Separating lead and backing vocals failed (${msg}), so it was skipped.`);
+            }
+            this.freeSeparator();
+          }
+        }
+        if (!live()) return;
+        if (lead) {
+          leadVocals = lead;
+          this.stemsPending = true;
+          this.send({ type: 'lead', lead: lead.slice(), sr: ANALYSIS_SR, params: this.params });
+        }
+      }
+
       // The separation models hold several hundred MB; free them before Whisper loads.
       // (They reload from the IndexedDB cache in seconds for the next song.)
-      this.separator?.terminate();
-      this.separator = undefined;
+      this.freeSeparator();
 
-      // 3. Lyrics.
-      if (wantLyrics && vocals) {
+      // 4. Lyrics: pasted, else transcribed by Whisper; then aligned to the vocals.
+      let lyricWords: LyricWord[] = this.lyricsText ? parseLyrics(this.lyricsText) : [];
+      let hints: WordHint[] | undefined;
+      if (!lyricWords.length && wantLyrics && vocals) {
         const key = this.cacheKey('lyrics', vocalsVariant);
         let words = await idbGet<AsrWord[]>(key);
         if (!words) {
@@ -357,7 +445,23 @@ export class App {
         if (!live()) return;
         if (!words) throw new Error('no lyrics were returned');
         this.stemsPending = true;
+        // Whisper's own timing first; the letter-level alignment below refines it.
         this.send({ type: 'lyrics', words, params: this.params });
+        ({ words: lyricWords, hints } = wordsFromAsr(words));
+        this.lyricsText = lyricLines(lyricWords);
+      }
+      if (vocals) this.alignSources = [{ audio: vocals, variant: vocalsVariant }, ...(leadVocals ? [{ audio: leadVocals, variant: 'lead' }] : [])];
+      // Pasted or transcribed lyrics always get aligned; without lyrics, the same model still
+      // gives precise syllables.
+      if (vocals && (lyricWords.length || wantAlign)) {
+        try {
+          await this.alignLyrics(lyricWords, hints, live, notes);
+        } catch (err) {
+          if (err instanceof Error && err.message === 'cancelled') throw err;
+          console.warn('[lyrics] vocal timing failed', err);
+          notes.push(`Precise vocal timing failed (${err instanceof Error ? err.message : String(err)}).`);
+        }
+        this.freeSeparator();
       }
       this.separating = false;
       this.pipelineNotes = notes.join(' ');
@@ -386,7 +490,7 @@ export class App {
         const m = e.data;
         if (m.type === 'download') {
           const mb = (n: number) => (n / 1e6).toFixed(0);
-          const what = m.model === 'roformer' ? 'high-quality vocal model' : 'separation model';
+          const what = { htdemucs: 'separation model', roformer: 'high-quality vocal model', lead: 'lead vocal model', aligner: 'lyrics alignment model', notes: 'note model' }[m.model];
           this.setStemStatus(m.cached ? `Loading the ${what}…` : `Downloading the ${what} (one time): ${mb(m.loaded)} / ${mb(m.total)} MB`, false, true, m.loaded / m.total);
         } else if (m.type === 'backend') {
           backend = m.backend === 'webgpu' ? 'GPU' : `CPU, ${m.threads} thread${m.threads > 1 ? 's' : ''}`;
@@ -434,6 +538,107 @@ export class App {
       worker.onerror = (e) => { e.preventDefault(); reject(new Error(e.message || 'the lyrics worker crashed (possibly out of memory)')); };
       worker.postMessage({ type: 'transcribe', audio16k, cpuOnly } satisfies ToLyrics, [audio16k.buffer]);
     });
+  }
+
+  /**
+   * Align lyric words to the vocals: character probabilities from the aligner model for each
+   * vocal source (cached per song and stem), then Viterbi alignment in the analysis worker.
+   */
+  private async alignLyrics(words: LyricWord[], hints: WordHint[] | undefined, live: () => boolean, notes: string[]) {
+    const label = words.length ? 'Aligning lyrics' : 'Finding vocal syllables';
+    const out: Emissions[] = [];
+    for (const [i, src] of this.alignSources.entries()) {
+      const key = this.cacheKey('emissions', src.variant);
+      let em = await idbGet<Emissions>(key);
+      if (!em) {
+        const step = this.alignSources.length > 1 ? ` (${i + 1}/${this.alignSources.length})` : '';
+        this.setStemStatus(`${label}${step}: preparing…`, false, true);
+        const audio16k = await resample(src.audio, ANALYSIS_SR, W2V_SR);
+        let m: FromSeparator;
+        try {
+          m = await this.separatorJob({ type: 'emissions', audio16k: audio16k.slice() }, label + step, live);
+        } catch (err) {
+          if (!(err instanceof Error && err.message === 'needs-gpu-memory')) throw err;
+          this.freeSeparator();
+          notes.push('The GPU ran out of memory, so vocal timing ran on the CPU.');
+          m = await this.separatorJob({ type: 'emissions', audio16k, cpuOnly: true }, label + step, live);
+        }
+        if (m.type !== 'emissions') return;
+        em = m.emissions;
+        void idbPut(key, em);
+      }
+      if (!live()) return;
+      out.push(em);
+    }
+    [this.emissions, this.leadEmissions] = out;
+    if (!this.emissions) return;
+    await this.sendPron();
+    this.stemsPending = true;
+    this.send({ type: 'align', emissions: this.emissions, leadEmissions: this.leadEmissions, words, hints, params: this.params });
+  }
+
+  /** Stop the separation worker, freeing its models' memory (they reload from IndexedDB). */
+  private freeSeparator() {
+    this.separator?.terminate();
+    this.separator = undefined;
+  }
+
+  /** The pronunciation dictionary, for syllables and phonemes; loaded once per page. */
+  private async sendPron() {
+    if (this.pronSent) return;
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}cmudict.txt.gz`);
+      if (!res.ok) throw new Error(String(res.status));
+      // Some servers send .gz files with Content-Encoding: gzip, so the browser has already
+      // decompressed them; only gunzip what still starts with the gzip magic bytes.
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const gz = bytes[0] === 0x1f && bytes[1] === 0x8b;
+      this.send({ type: 'pron', dict: strFromU8(gz ? gunzipSync(bytes) : bytes) });
+      this.pronSent = true;
+    } catch (err) {
+      // Without it, syllables come from spelling rules and there's no phoneme layer.
+      console.warn('[lyrics] pronunciation dictionary unavailable', err);
+    }
+  }
+
+  private openLyricsDialog() {
+    const dlg = $<HTMLDialogElement>('#lyrics-dialog');
+    $<HTMLTextAreaElement>('#lyrics-edit').value = this.lyricsText;
+    const canAlign = !this.separating && this.alignSources.length > 0;
+    $<HTMLButtonElement>('#lyrics-align').disabled = !canAlign;
+    $('#lyrics-dialog-note').textContent = this.separating
+      ? 'The song is still being processed; you can align lyrics once it’s done.'
+      : !this.alignSources.length
+        ? 'Lyrics are aligned to the separated vocals. Turn on “Separate stems” and load the song again.'
+        : this.emissions ? '' : 'The first alignment downloads the vocal timing model (once) and takes a little longer.';
+    dlg.showModal();
+  }
+
+  /** Align edited or newly pasted lyrics from the editor. */
+  private async realign(text: string) {
+    const words = parseLyrics(text);
+    this.lyricsText = text.trim();
+    if (!words.length || this.separating || !this.alignSources.length) return;
+    const id = this.loadId;
+    const live = () => id === this.loadId;
+    const notes: string[] = [];
+    try {
+      if (!this.emissions) {
+        this.separating = true;
+        await this.alignLyrics(words, undefined, live, notes);
+        this.freeSeparator();
+      } else {
+        this.stemsPending = true;
+        this.send({ type: 'align', emissions: this.emissions, leadEmissions: this.leadEmissions, words, params: this.params });
+      }
+      this.separating = false;
+      this.pipelineNotes = notes.join(' ');
+      this.setStemStatus(this.pipelineNotes, false);
+    } catch (err) {
+      this.separating = false;
+      const msg = err instanceof Error ? err.message : String(err);
+      this.setStemStatus(msg === 'cancelled' ? 'Cancelled.' : `Aligning the lyrics failed: ${msg}`, msg !== 'cancelled');
+    }
   }
 
   private showCpuHint(onCpu: boolean) {
@@ -757,7 +962,8 @@ export class App {
   private exportable(): Track[] {
     return this.tracks.filter((s) => s.include).map((s) => {
       const shift = s.nudgeMs / 1000;
-      return shift ? { ...s.track, marks: s.track.marks.map((m) => ({ ...m, start: m.start + shift, end: m.end + shift })) } : s.track;
+      const move = (marks: Track['marks']) => marks.map((m) => ({ ...m, start: m.start + shift, end: m.end + shift }));
+      return shift ? { ...s.track, marks: move(s.track.marks), layers: s.track.layers?.map(move) } : s.track;
     });
   }
 

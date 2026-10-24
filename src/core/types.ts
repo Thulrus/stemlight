@@ -11,6 +11,11 @@ export type Track = {
   /** Which audio the track came from, e.g. "mix", "drums", "vocals". */
   source: string;
   marks: Mark[];
+  /**
+   * Further effect layers under `marks`, exported as extra EffectLayers of the same timing
+   * track. xLights lyric tracks use this: phrases, then words, then phonemes.
+   */
+  layers?: Mark[][];
   params: Record<string, number>;
 };
 

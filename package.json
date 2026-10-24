@@ -18,7 +18,10 @@
     "eval": "vitest run tests/eval.test.ts",
     "tool:separate": "STEMLIGHT_TOOLS=1 vitest run tools/separate-songs.test.ts --disableConsoleIntercept",
     "bench": "vitest run tests/bench.test.ts --disableConsoleIntercept",
-    "tool:vocals-hq": "STEMLIGHT_TOOLS=1 vitest run tools/separate-vocals-hq.test.ts --disableConsoleIntercept"
+    "tool:vocals-hq": "STEMLIGHT_TOOLS=1 vitest run tools/separate-vocals-hq.test.ts --disableConsoleIntercept",
+    "tool:align-eval": "STEMLIGHT_TOOLS=1 vitest run tools/align-eval.test.ts --disableConsoleIntercept",
+    "tool:lead": "STEMLIGHT_TOOLS=1 vitest run tools/separate-lead.test.ts --disableConsoleIntercept",
+    "tool:emissions": "STEMLIGHT_TOOLS=1 vitest run tools/emissions.test.ts --disableConsoleIntercept"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.1",

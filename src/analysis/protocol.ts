@@ -1,6 +1,10 @@
+import type { PitchFrames } from '../notes/basicPitch';
 import type { Track } from '../core/types';
 import type { StemName } from '../separation/htdemucs';
 import type { MixParams } from './analyze';
+import type { WordHint } from '../align/align';
+import type { Emissions } from '../align/ctc';
+import type { LyricWord } from '../align/text';
 import type { AsrWord } from './lyrics';
 import type { StemParams } from './stems';
 
@@ -13,6 +17,19 @@ export type ToWorker =
   | { type: 'stems'; stems: StemAudio; sr: number; params: AllParams }
   /** Recognized words (Whisper); aligned to the vocal tracks on every run. */
   | { type: 'lyrics'; words: AsrWord[]; params: AllParams }
+  /** The lead vocal alone (karaoke separation); backing vocals = vocals − lead. */
+  | { type: 'lead'; lead: Float32Array; sr: number; params: AllParams }
+  /** Basic Pitch frames of a stem: "other" (guitars, keys, …) or the vocals, for note tracks. */
+  | { type: 'pitch'; stem: 'other' | 'vocals'; frames: PitchFrames; params: AllParams }
+  /** The pronunciation dictionary (public/cmudict.txt.gz, decompressed), sent once. */
+  | { type: 'pron'; dict: string }
+  /**
+   * Lyrics to align to the vocals with the aligner's character probabilities (of all vocals;
+   * of the lead alone too when separated, for lyric-free syllables): pasted lyrics, or
+   * Whisper's words with their times as hints; no words means syllables only. Replaces any
+   * earlier alignment.
+   */
+  | { type: 'align'; emissions: Emissions; leadEmissions?: Emissions; words: LyricWord[]; hints?: WordHint[]; params: AllParams }
   /** Re-run track builders on the cached features with new parameters (no reprocessing). */
   | { type: 'rerun'; params: AllParams };
 

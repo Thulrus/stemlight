@@ -8,12 +8,14 @@ import { STEM_NAMES } from '../src/separation/htdemucs';
 import { separate, STEM_SR } from '../src/separation/separate';
 import { decodeStereo, decodeWithFfmpeg, wavBytes } from '../tests/audio';
 
-const SONGS = new URL('../example_data/', import.meta.url).pathname;
+// SONGS_DIR=<dir> separates another folder (e.g. fixtures/private/jamendo/mp3/); ORT_EP=cuda uses
+// onnxruntime-node's CUDA provider (needs the CUDA 13 runtime libraries on LD_LIBRARY_PATH).
+const SONGS = process.env.SONGS_DIR ? process.env.SONGS_DIR.replace(/\/?$/, '/') : new URL('../example_data/', import.meta.url).pathname;
 const OUT = new URL('../fixtures/private/stems/', import.meta.url).pathname;
 const MODEL = new URL('../fixtures/private/models/htdemucs_fwd.onnx', import.meta.url).pathname;
 
 it('separates example songs', async () => {
-  const session = await ort.InferenceSession.create(MODEL, { executionProviders: ['cpu'], intraOpNumThreads: 0 });
+  const session = await ort.InferenceSession.create(MODEL, { executionProviders: [process.env.ORT_EP ?? 'cpu'], intraOpNumThreads: 0 });
   const only = process.env.SONG;
   for (const f of readdirSync(SONGS).filter((n) => /\.(mp3|wav|flac)$/i.test(n) && (!only || n.includes(only)))) {
     const dir = OUT + f.replace(/\.[^.]+$/, '') + '/';

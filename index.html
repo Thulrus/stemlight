@@ -46,16 +46,30 @@
               <input id="opt-hq-vocals" type="checkbox" />
               <span>High-quality vocals <span class="muted">· 464 MB model, needs a GPU (Chrome or Edge)</span></span>
             </label>
-            <label class="field inline sub" title="Transcribes the vocals with Whisper and labels phrases and words with the lyrics. Timing comes from the vocal tracks; Whisper only supplies the words.">
+            <label class="field inline sub" title="A karaoke model (BS-RoFormer) splits the lead singer from backing vocals and harmonies, so syllables and lyrics follow the lead, and backing vocals get their own track. GPU only.">
+              <input id="opt-lead" type="checkbox" />
+              <span>Separate lead and backing vocals <span class="muted">· 210 MB model, needs a GPU</span></span>
+            </label>
+            <label class="field inline sub" title="A speech model (wav2vec2) hears where each sung consonant and vowel starts. It finds vocal syllables far more precisely than the audio alone, and aligns lyrics letter by letter.">
+              <input id="opt-align" type="checkbox" checked />
+              <span>Precise vocal syllables and lyric timing <span class="muted">· 190–380 MB model</span></span>
+            </label>
+            <label class="field inline sub" title="Transcribes the vocals with Whisper when you haven't pasted the lyrics. The words are then aligned to the singing letter by letter.">
               <input id="opt-lyrics" type="checkbox" />
-              <span>Transcribe lyrics <span class="muted">· 250–320 MB model, best with a GPU</span></span>
+              <span>Transcribe lyrics if none are pasted <span class="muted">· 250–320 MB model, best with a GPU</span></span>
             </label>
           </div>
         </div>
+        <details class="lyrics-box" id="lyrics-box">
+          <summary>Paste the lyrics <span class="muted">(optional, gives the best word, syllable and phoneme timing)</span></summary>
+          <textarea id="lyrics-text" rows="8" spellcheck="false" placeholder="One lyric line per line, in the order they're sung, repeats included. [Chorus] tags and blank lines are ignored."></textarea>
+          <p class="muted small">With stems on, the lyrics are aligned to the vocals letter by letter (the precise vocal timing model).</p>
+        </details>
         <p class="muted small center">
           You get Sections, Phrases, Bars, Beats (1–4), Onsets and Energy tracks right away. With stems you also get
-          Vocal phrases and syllables, Kick, Snare, Hats, Bass notes and Other accents, and with lyrics on,
-          Lyric lines and Lyric words labeled with what's sung.
+          Vocal phrases and syllables, Kick, Snare, Hats, Bass notes and Other accents. With lyrics (pasted or
+          transcribed) you also get Lyric lines, Lyric words, labeled syllables and a Lyrics track with phrases, words
+          and phonemes for singing faces.
         </p>
       </section>
 
@@ -87,6 +101,7 @@
           <span id="stem-strip" class="stem-strip" hidden></span>
           <span class="spacer"></span>
           <span class="file-info"><strong id="file-name"></strong> <span id="file-meta" class="muted"></span></span>
+          <button id="edit-lyrics" class="btn small" title="Paste or correct the lyrics and align them again">Lyrics…</button>
           <button id="new-file" class="btn small">New song</button>
         </div>
         <div id="stem-status" class="stem-status" role="status" hidden>
@@ -135,6 +150,19 @@
         </div>
       </section>
     </main>
+
+    <dialog id="lyrics-dialog" class="lyrics-dialog">
+      <form method="dialog">
+        <h2>Lyrics</h2>
+        <p class="muted small">One lyric line per line, in the order they're sung, repeats included. Fix any misheard words and align again; the alignment reuses this song's analysis, so it only takes a moment.</p>
+        <textarea id="lyrics-edit" rows="16" spellcheck="false"></textarea>
+        <p id="lyrics-dialog-note" class="muted small"></p>
+        <div class="row actions">
+          <button value="cancel" class="btn">Cancel</button>
+          <button id="lyrics-align" value="align" class="btn primary">Align lyrics</button>
+        </div>
+      </form>
+    </dialog>
 
     <footer class="foot">
       <span>Stemlight is free software under the <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>.</span>

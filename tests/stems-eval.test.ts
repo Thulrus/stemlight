@@ -9,7 +9,8 @@ import { STEM_NAMES, type StemName } from '../src/separation/htdemucs';
 import { readWav16, STEMS_DIR } from './audio';
 
 const HALLOWEEN = '00 - 03 This Is Halloween';
-const songs = existsSync(STEMS_DIR) ? readdirSync(STEMS_DIR).filter((d) => existsSync(`${STEMS_DIR}${d}/vocals.wav`)) : [];
+// The example songs only; JamendoLyrics stems (named like Artist_-_Title) have their own tools.
+const songs = existsSync(STEMS_DIR) ? readdirSync(STEMS_DIR).filter((d) => existsSync(`${STEMS_DIR}${d}/vocals.wav`) && !/_-_/.test(d)) : [];
 const f3 = (x: number) => x.toFixed(3);
 
 /** Stem tracks for one cached song; the mix is the sum of the stems (they reconstruct it at ~30 dB SNR). */
