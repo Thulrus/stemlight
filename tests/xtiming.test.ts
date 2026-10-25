@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { strFromU8, unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { parseTimingTracks } from '../src/core/parseXTiming';
-import { quantizeMarks } from '../src/core/quantize';
-import type { Track } from '../src/core/types';
-import { escapeXmlAttr, toXTiming } from '../src/export/xtiming';
-import { tracksToZip } from '../src/export/zip';
+import { parseTimingTracks } from '@stemlight/core/parseXTiming';
+import { quantizeMarks } from '@stemlight/core/quantize';
+import type { Track } from '@stemlight/core/types';
+import { escapeXmlAttr, toXTiming } from '@stemlight/core/xtiming';
+import { tracksToZip } from '@stemlight/core/zip';
 
 const fixture = readFileSync(new URL('../fixtures/ThisIsHalloween.xlights.xtiming', import.meta.url), 'utf8');
 const xsq = readFileSync(new URL('../fixtures/ThisIsHalloweenFilm.xsq', import.meta.url), 'utf8');

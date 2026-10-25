@@ -1,4 +1,4 @@
-import { ANALYSIS_SR } from '../src/dsp/features';
+import { ANALYSIS_SR } from '../apps/timing/src/dsp/features';
 
 /** A drum-machine-ish loop: kick on 1 and 3, snare on 2 and 4, hats on eighths, plus a chord change per bar. */
 export function synthLoop(bpm: number, bars: number, sr = ANALYSIS_SR) {

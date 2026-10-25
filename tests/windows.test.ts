@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asrWindows } from '../src/lyrics/windows';
+import { asrWindows } from '../apps/timing/src/lyrics/windows';
 
 describe('asrWindows', () => {
   it('starts windows at the singing and skips instrumental gaps', () => {

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { roundTripForTest } from '../src/separation/roformer';
+import { roundTripForTest } from '../apps/timing/src/separation/roformer';
 
 it('RoFormer STFT/iSTFT reproduce a chunk', () => {
   const n = 352800;

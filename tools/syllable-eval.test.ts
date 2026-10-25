@@ -6,13 +6,13 @@
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { it } from 'vitest';
-import { alignWords, type CharVocab } from '../src/align/align';
-import { greedySyllables } from '../src/align/greedy';
-import { parsePronDict } from '../src/align/pron';
-import { parseLyrics } from '../src/align/text';
-import { attackOnsets } from '../src/analysis/vocals';
-import { computeFeatures } from '../src/dsp/features';
-import { eventF } from '../src/eval/metrics';
+import { alignWords, type CharVocab } from '../apps/timing/src/align/align';
+import { greedySyllables } from '../apps/timing/src/align/greedy';
+import { parsePronDict } from '../apps/timing/src/align/pron';
+import { parseLyrics } from '../apps/timing/src/align/text';
+import { attackOnsets } from '../apps/timing/src/analysis/vocals';
+import { computeFeatures } from '../apps/timing/src/dsp/features';
+import { eventF } from '../apps/timing/src/eval/metrics';
 import { readWav16, STEMS_DIR } from '../tests/audio';
 import { readEmissions } from '../tests/emissions';
 

@@ -1,7 +1,7 @@
 import * as ort from 'onnxruntime-node';
 import { describe, expect, it } from 'vitest';
-import { basicPitchFrames, BP_SR } from '../src/notes/basicPitch';
-import { DEFAULT_MELODY_PARAMS, melodyNotes } from '../src/notes/melody';
+import { basicPitchFrames, BP_SR } from '../apps/timing/src/notes/basicPitch';
+import { DEFAULT_MELODY_PARAMS, melodyNotes } from '../apps/timing/src/notes/melody';
 
 /** A sung-like tone: a few harmonics, with optional vibrato (semitones) and a release. */
 function melody(notes: { t: number; dur: number; midi: number; vib?: number }[], seconds: number, decay = 0.5) {
@@ -30,7 +30,7 @@ const levelOf = (x: Float32Array) => (t: number) => {
 
 describe('melody notes', () => {
   it('follows a legato line note by note, through vibrato, as touching notes', async () => {
-    const session = await ort.InferenceSession.create(new URL('../src/notes/basic-pitch.onnx', import.meta.url).pathname);
+    const session = await ort.InferenceSession.create(new URL('../apps/timing/src/notes/basic-pitch.onnx', import.meta.url).pathname);
     // A4 A#4 C5 A#4 A4 sung without gaps (one tone ends where the next starts), with vibrato.
     const tune = [69, 70, 72, 70, 69].map((midi, i) => ({ t: 0.5 + i * 0.6, dur: 0.6, midi, vib: 0.4 }));
     const x = melody(tune, 4);

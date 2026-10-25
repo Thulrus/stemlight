@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alignLyrics, type AsrWord } from '../src/analysis/lyrics';
+import { alignLyrics, type AsrWord } from '../apps/timing/src/analysis/lyrics';
 
 const span = (start: number, end: number) => ({ start, end });
 
@@ -42,7 +42,7 @@ describe('alignLyrics', () => {
 
 describe('Whisper filler', () => {
   it('drops sentences that are only filler, and keeps lyrics that contain the same words', async () => {
-    const { dropFiller } = await import('../src/lyrics/transcribe');
+    const { dropFiller } = await import('../apps/timing/src/lyrics/transcribe');
     const words = (s: string) => s.split(' ').map((text) => ({ text }));
     const kept = dropFiller(words('Music. Thank you. Cara mia, addio! [Music] Thank you for the music.')).map((w) => w.text);
     expect(kept).toEqual(['Cara', 'mia,', 'addio!', 'Thank', 'you', 'for', 'the', 'music.']);

@@ -5,9 +5,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { env, pipeline } from '@huggingface/transformers';
 import { it } from 'vitest';
-import { parseTimingTracks } from '../src/core/parseXTiming';
-import { eventF } from '../src/eval/metrics';
-import { parseModelEffects } from '../src/eval/xsq';
+import { parseTimingTracks } from '@stemlight/core/parseXTiming';
+import { eventF } from '../apps/timing/src/eval/metrics';
+import { parseModelEffects } from '../apps/timing/src/eval/xsq';
 import { STEMS_DIR } from '../tests/audio';
 
 env.cacheDir = new URL('../fixtures/private/models/hf/', import.meta.url).pathname;

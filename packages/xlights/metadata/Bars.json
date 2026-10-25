@@ -1,0 +1,120 @@
+{
+    "effectName": "Bars",
+    "properties": [
+        {
+            "id": "Bars_BarCount",
+            "label": "Palette Rep",
+            "type": "int",
+            "controlType": "slider",
+            "default": 1,
+            "min": 1,
+            "max": 5,
+            "valueCurve": true,
+            "lockable": true,
+            "description": "Number of times the full palette color sequence repeats across the model. Higher values produce more, thinner bars."
+        },
+        {
+            "id": "Bars_Cycles",
+            "label": "Cycles",
+            "type": "float",
+            "controlType": "slider",
+            "default": 1.0,
+            "divisor": 10,
+            "valueCurve": true,
+            "min": 0,
+            "max": 300,
+            "description": "Number of times the bars scroll completely across the model during the effect. Higher values make the bars move faster."
+        },
+        {
+            "id": "Bars_Direction",
+            "label": "Direction",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [
+                "up",
+                "down",
+                "expand",
+                "compress",
+                "Left",
+                "Right",
+                "H-expand",
+                "H-compress",
+                "Alternate Up",
+                "Alternate Down",
+                "Alternate Left",
+                "Alternate Right",
+                "Custom Horz",
+                "Custom Vert"
+            ],
+            "default": "up",
+            "lockable": true,
+            "description": "Direction the bars travel. Expand/compress radiate from or collapse toward a center point. Alternate modes snap bars one step at a time. Custom modes place static bars with an adjustable center offset."
+        },
+        {
+            "id": "Bars_Center",
+            "label": "Center Point",
+            "type": "int",
+            "controlType": "slider",
+            "default": 0,
+            "valueCurve": true,
+            "min": -100,
+            "max": 100,
+            "settingPrefix": "TEXTCTRL",
+            "description": "Shifts the expansion/compression origin or the static bar offset. 0 is the model center; negative values shift left/down, positive values shift right/up."
+        },
+        {
+            "id": "Bars_Highlight",
+            "label": "Highlight",
+            "type": "bool",
+            "controlType": "checkbox",
+            "default": false,
+            "lockable": true,
+            "description": "Adds a bright white highlight line at the leading edge of each bar to make the boundaries between colors more visible."
+        },
+        {
+            "id": "Bars_UseFirstColorForHighlight",
+            "label": "Use First Color for Highlight",
+            "type": "bool",
+            "controlType": "checkbox",
+            "default": false,
+            "lockable": true,
+            "description": "When Highlight is enabled, uses the first palette color for the highlight line instead of white. The first color is then excluded from the bar pattern."
+        },
+        {
+            "id": "Bars_3D",
+            "label": "3D",
+            "type": "bool",
+            "controlType": "checkbox",
+            "default": false,
+            "lockable": true,
+            "description": "Applies a brightness or alpha gradient within each bar so it fades from full brightness at one edge to dark at the other, giving a three-dimensional appearance."
+        },
+        {
+            "id": "Bars_Gradient",
+            "label": "Gradient",
+            "type": "bool",
+            "controlType": "checkbox",
+            "default": false,
+            "lockable": true,
+            "description": "Smoothly blends colors between adjacent bars instead of using hard edges, creating a continuous gradient across the palette."
+        }
+    ],
+    "visibilityRules": [
+        {
+            "when": {
+                "property": "Bars_Direction",
+                "oneOf": [
+                    "expand",
+                    "compress",
+                    "H-expand",
+                    "H-compress",
+                    "Custom Horz",
+                    "Custom Vert"
+                ]
+            },
+            "enable": [
+                "Bars_Center"
+            ]
+        }
+    ]
+}

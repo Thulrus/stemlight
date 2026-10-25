@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { bassTracks, DEFAULT_STEM_PARAMS, drumTracks } from '../src/analysis/stems';
-import { attackOnsets, DEFAULT_VOCAL_PARAMS, phrasesFrom, syllableSpans } from '../src/analysis/vocals';
-import { ANALYSIS_SR, computeFeatures } from '../src/dsp/features';
-import { eventF } from '../src/eval/metrics';
+import { bassTracks, DEFAULT_STEM_PARAMS, drumTracks } from '../apps/timing/src/analysis/stems';
+import { attackOnsets, DEFAULT_VOCAL_PARAMS, phrasesFrom, syllableSpans } from '../apps/timing/src/analysis/vocals';
+import { ANALYSIS_SR, computeFeatures } from '../apps/timing/src/dsp/features';
+import { eventF } from '../apps/timing/src/eval/metrics';
 import { synthLoop } from './synth';
 
 const sr = ANALYSIS_SR;

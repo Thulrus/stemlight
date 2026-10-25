@@ -11,7 +11,15 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "types": ["vite/client", "node"],
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@stemlight/core/*": ["./packages/core/*"],
+      "@stemlight/audio/*": ["./packages/audio/*"],
+      "@stemlight/storage/*": ["./packages/storage/*"],
+      "@stemlight/timeline/*": ["./packages/timeline/*"],
+      "@stemlight/xlights/*": ["./packages/xlights/*"],
+      "@timing/*": ["./apps/timing/src/*"]
+    }
   },
-  "include": ["src", "tests", "tools", "vite.config.ts"]
+  "include": ["apps", "packages", "tests", "tools", "vite.config.ts"]
 }

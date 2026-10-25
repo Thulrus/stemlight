@@ -1,0 +1,291 @@
+{
+    "effectName": "SingleStrand",
+    "properties": [
+        {
+            "id": "SingleStrand_Colors",
+            "label": "Colors",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [
+                "Rainbow",
+                "Palette"
+            ],
+            "default": "Palette",
+            "lockable": true,
+            "description": "Selects the color source for the chase. Palette uses the user-defined palette colors; Rainbow cycles through all hues automatically."
+        },
+        {
+            "id": "Number_Chases",
+            "label": "Number Chases",
+            "type": "int",
+            "controlType": "slider",
+            "default": 1,
+            "min": 1,
+            "max": 20,
+            "valueCurve": true,
+            "lockable": true,
+            "tooltip": "Number of chases within the string, may overlap if chase size is greater than can fit.",
+            "description": "Number of simultaneous chase segments running across the strand."
+        },
+        {
+            "id": "Color_Mix1",
+            "label": "Chase Size",
+            "type": "int",
+            "controlType": "slider",
+            "default": 10,
+            "min": 1,
+            "max": 100,
+            "valueCurve": true,
+            "lockable": true,
+            "tooltip": "Size of the effect in percentage of the string, will overlap if the number of chases are larger than can fit.  3 chases + > 33.3 percent = overlap",
+            "description": "Length of each lit chase segment as a percentage of the total strand length."
+        },
+        {
+            "id": "Chase_Rotations",
+            "label": "Cycles",
+            "type": "float",
+            "controlType": "slider",
+            "default": 1.0,
+            "divisor": 10,
+            "valueCurve": true,
+            "lockable": true,
+            "min": 1,
+            "max": 500,
+            "description": "Number of complete chase traversals over the effect duration. Higher values make the chase move faster."
+        },
+        {
+            "id": "SingleStrand_TimingTrack",
+            "label": "Timing Track",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [],
+            "default": "",
+            "dynamicOptions": "timingTracks",
+            "expandToFill": true,
+            "lockable": true,
+            "description": "When set, the chase performs the Cycles count between each pair of timing marks on this track instead of over the whole effect duration. No chase is drawn before the first mark or after the last mark."
+        },
+        {
+            "id": "Chase_Offset",
+            "label": "Offset",
+            "type": "float",
+            "controlType": "slider",
+            "default": 0.0,
+            "divisor": 10,
+            "valueCurve": true,
+            "lockable": true,
+            "min": -5000,
+            "max": 5000,
+            "tooltip": "Offset by the percentage of the string, will loop > +/- 100",
+            "description": "Shifts the starting position of the chase pattern along the strand. Useful for staggering chases across multiple models."
+        },
+        {
+            "id": "Chase_Type1",
+            "label": "Chase Types",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [
+                "Left-Right",
+                "Right-Left",
+                "Bounce from Left",
+                "Bounce from Right",
+                "Dual Chase",
+                "From Middle",
+                "To Middle",
+                "Bounce to Middle",
+                "Bounce from Middle",
+                "Static Left-Right",
+                "Static Right-Left",
+                "Static Dual",
+                "Static From Middle",
+                "Static To Middle",
+                "Static Double-Ended"
+            ],
+            "default": "Left-Right",
+            "lockable": true,
+            "description": "Direction and movement pattern of the chase. Bounce types reverse at edges, Dual runs two chases simultaneously, Static types display without motion, and Middle types expand or contract from the center."
+        },
+        {
+            "id": "Fade_Type",
+            "label": "Fade",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [
+                "None",
+                "From Head",
+                "From Tail",
+                "Head and Tail",
+                "Middle"
+            ],
+            "default": "None",
+            "lockable": true,
+            "tooltip": "From Head - Brightest at the start, From Tail - Brightest and the end, Head and Tail - Brightest at both ends, Middle - Brightest in the middle",
+            "description": "Applies a brightness fade to the chase segment. 'From Head' fades from the leading edge, 'From Tail' from the trailing edge, 'Head and Tail' fades both ends, and 'Middle' fades from the center outward."
+        },
+        {
+            "id": "Chase_Group_All",
+            "label": "Group All Strands",
+            "type": "bool",
+            "controlType": "checkbox",
+            "default": false,
+            "lockable": true,
+            "description": "When enabled, treats all strands of the model as one continuous strand for the chase, so the pattern flows seamlessly across strand boundaries."
+        },
+        {
+            "id": "Skips_BandSize",
+            "label": "Band size",
+            "type": "int",
+            "controlType": "slider",
+            "default": 1,
+            "min": 1,
+            "max": 20,
+            "lockable": true,
+            "description": "Number of consecutive lit pixels in each colored band of the skip pattern."
+        },
+        {
+            "id": "Skips_SkipSize",
+            "label": "Skip size",
+            "type": "int",
+            "controlType": "slider",
+            "default": 1,
+            "min": 0,
+            "max": 20,
+            "lockable": true,
+            "description": "Number of unlit (dark) pixels between each colored band. Set to 0 for no gaps."
+        },
+        {
+            "id": "Skips_StartPos",
+            "label": "Starting Position",
+            "type": "int",
+            "controlType": "slider",
+            "default": 1,
+            "min": 1,
+            "max": 20,
+            "lockable": true,
+            "description": "Pixel offset where the first band begins on the strand."
+        },
+        {
+            "id": "Skips_Advance",
+            "label": "Number of Advances",
+            "type": "int",
+            "controlType": "slider",
+            "default": 0,
+            "min": 0,
+            "max": 100,
+            "lockable": true,
+            "description": "Number of times the skip pattern shifts position over the effect duration. Higher values make the pattern appear to march along the strand."
+        },
+        {
+            "id": "Skips_Direction",
+            "label": "Direction",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [
+                "Left",
+                "Right",
+                "From Middle",
+                "To Middle"
+            ],
+            "default": "Left",
+            "lockable": true,
+            "description": "Direction in which the skip pattern is drawn. 'From Middle' and 'To Middle' mirror the pattern from the center of the strand."
+        },
+        {
+            "id": "SingleStrand_FX",
+            "label": "FX",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [],
+            "default": "Blink",
+            "dynamicOptions": "effect",
+            "expandToFill": true,
+            "description": "Selects which WS2812FX-style animation to run, such as Blink, Breath, Color Wipe, Rainbow, Fire Flicker, and many more."
+        },
+        {
+            "id": "SingleStrand_FX_Palette",
+            "label": "Palette",
+            "type": "enum",
+            "controlType": "choice",
+            "options": [],
+            "default": "Default",
+            "dynamicOptions": "effect",
+            "expandToFill": true,
+            "description": "Selects the color palette mode used by the chosen FX animation, controlling how colors are applied to the effect."
+        },
+        {
+            "id": "FX_Intensity",
+            "label": "Intensity",
+            "type": "int",
+            "controlType": "slider",
+            "default": 128,
+            "min": 0,
+            "max": 255,
+            "valueCurve": true,
+            "description": "Controls the intensity parameter of the selected FX animation. Its exact meaning varies by effect (e.g., brightness, size, or density)."
+        },
+        {
+            "id": "FX_Speed",
+            "label": "Speed",
+            "type": "int",
+            "controlType": "slider",
+            "default": 128,
+            "min": 0,
+            "max": 255,
+            "valueCurve": true,
+            "description": "Controls the speed of the selected FX animation. Higher values produce faster transitions and movement."
+        }
+    ],
+    "groups": [
+        {
+            "type": "tabs",
+            "tabs": [
+                {
+                    "label": "Chase",
+                    "properties": [
+                        "SingleStrand_Colors",
+                        "Number_Chases",
+                        "Color_Mix1",
+                        "Chase_Rotations",
+                        "SingleStrand_TimingTrack",
+                        "Chase_Offset",
+                        "Chase_Type1",
+                        "Fade_Type",
+                        "Chase_Group_All"
+                    ]
+                },
+                {
+                    "label": "Skips",
+                    "properties": [
+                        "Skips_BandSize",
+                        "Skips_SkipSize",
+                        "Skips_StartPos",
+                        "Skips_Advance",
+                        "Skips_Direction"
+                    ]
+                },
+                {
+                    "label": "FX",
+                    "properties": [
+                        "SingleStrand_FX",
+                        "SingleStrand_FX_Palette",
+                        "FX_Intensity",
+                        "FX_Speed"
+                    ]
+                }
+            ],
+            "settingKey": "E_NOTEBOOK_SSEFFECT_TYPE"
+        }
+    ],
+    "visibilityRules": [
+        {
+            "when": {
+                "property": "Chase_Type1",
+                "startsWith": "Static"
+            },
+            "disable": [
+                "Chase_Rotations",
+                "SingleStrand_TimingTrack"
+            ]
+        }
+    ]
+}

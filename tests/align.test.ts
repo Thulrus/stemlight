@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { forcedAlign, type Emissions } from '../src/align/ctc';
-import { numberWords, parseLyrics, syllabify } from '../src/align/text';
+import { forcedAlign, type Emissions } from '../apps/timing/src/align/ctc';
+import { numberWords, parseLyrics, syllabify } from '../apps/timing/src/align/text';
 
 describe('syllabify', () => {
   const cases: [string, string[]][] = [
@@ -62,7 +62,7 @@ describe('forcedAlign', () => {
 
 describe('matchWords', () => {
   it('pairs equal words around insertions and substitutions', async () => {
-    const { matchWords } = await import('../src/eval/align');
+    const { matchWords } = await import('../apps/timing/src/eval/align');
     expect(matchWords(['i', 'found', 'a', 'girl', 'yeah'], ['i', 'found', 'me', 'a', 'girl'])).toEqual([[0, 0], [1, 1], [2, 3], [3, 4]]);
   });
 });

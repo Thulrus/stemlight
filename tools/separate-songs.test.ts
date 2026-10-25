@@ -4,8 +4,8 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import * as ort from 'onnxruntime-node';
 import { it } from 'vitest';
-import { STEM_NAMES } from '../src/separation/htdemucs';
-import { separate, STEM_SR } from '../src/separation/separate';
+import { STEM_NAMES } from '../apps/timing/src/separation/htdemucs';
+import { separate, STEM_SR } from '../apps/timing/src/separation/separate';
 import { decodeStereo, decodeWithFfmpeg, wavBytes } from '../tests/audio';
 
 // SONGS_DIR=<dir> separates another folder (e.g. fixtures/private/jamendo/mp3/); ORT_EP=cuda uses

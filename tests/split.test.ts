@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { snapMarks } from '../src/analysis/snap';
-import { channelOf, labelMidi, splitTrack } from '../src/core/split';
-import type { Track } from '../src/core/types';
+import { snapMarks } from '../apps/timing/src/analysis/snap';
+import { channelOf, labelMidi, splitTrack } from '@stemlight/core/split';
+import type { Track } from '@stemlight/core/types';
 
 const beats = (labels: string): Track => ({
   id: 'mix-beats', name: 'Beats', source: 'mix', params: {},

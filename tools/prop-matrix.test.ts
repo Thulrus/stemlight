@@ -4,9 +4,9 @@
 // Run: STEMLIGHT_TOOLS=1 npx vitest run tools/prop-matrix.test.ts --disableConsoleIntercept
 import { existsSync, readFileSync } from 'node:fs';
 import { it } from 'vitest';
-import { BENCH_CASES } from '../src/eval/bench';
-import { eventF, spanF, within } from '../src/eval/metrics';
-import { parseModelEffects } from '../src/eval/xsq';
+import { BENCH_CASES } from '../apps/timing/src/eval/bench';
+import { eventF, spanF, within } from '../apps/timing/src/eval/metrics';
+import { parseModelEffects } from '../apps/timing/src/eval/xsq';
 import { STEMS_DIR } from '../tests/audio';
 import { analyzeCachedSong } from '../tests/bench.test';
 

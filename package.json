@@ -21,7 +21,8 @@
     "tool:vocals-hq": "STEMLIGHT_TOOLS=1 vitest run tools/separate-vocals-hq.test.ts --disableConsoleIntercept",
     "tool:align-eval": "STEMLIGHT_TOOLS=1 vitest run tools/align-eval.test.ts --disableConsoleIntercept",
     "tool:lead": "STEMLIGHT_TOOLS=1 vitest run tools/separate-lead.test.ts --disableConsoleIntercept",
-    "tool:emissions": "STEMLIGHT_TOOLS=1 vitest run tools/emissions.test.ts --disableConsoleIntercept"
+    "tool:emissions": "STEMLIGHT_TOOLS=1 vitest run tools/emissions.test.ts --disableConsoleIntercept",
+    "tool:xlights": "STEMLIGHT_TOOLS=1 vitest run tools/xlights-render.test.ts --disableConsoleIntercept"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.1",

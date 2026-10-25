@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { parsePronDict, phoneSyllables, wordPron } from '../src/align/pron';
+import { parsePronDict, phoneSyllables, wordPron } from '../apps/timing/src/align/pron';
 
 const dict = parsePronDict(gunzipSync(readFileSync(new URL('../public/cmudict.txt.gz', import.meta.url))).toString('utf8'));
 const syl = (w: string) => wordPron(w, dict).syllables.map((s) => s.text);

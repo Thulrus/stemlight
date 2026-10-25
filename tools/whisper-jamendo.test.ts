@@ -4,8 +4,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { env, pipeline } from '@huggingface/transformers';
 import { it } from 'vitest';
-import { transcribeVocals } from '../src/lyrics/transcribe';
-import { WHISPER_MODEL, WHISPER_REVISION } from '../src/lyrics/protocol';
+import { transcribeVocals } from '../apps/timing/src/lyrics/transcribe';
+import { WHISPER_MODEL, WHISPER_REVISION } from '../apps/timing/src/lyrics/protocol';
 import { STEMS_DIR } from '../tests/audio';
 import { load16k } from '../tests/emissions';
 

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Stemlight: auto-timing tracks for xLights. Runs entirely in your browser; your audio never leaves your machine." />
+    <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+    <title>Stemlight Timing</title>
+    <!-- Cross-origin isolation (COOP/COEP) for multi-threaded WASM; GitHub Pages can't set headers. -->
+    <script src="../coi-serviceworker.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="../" title="All Stemlight apps">
+        <img src="../favicon.svg" alt="" width="22" height="22" />
+        <span>Stemlight</span>
+      </a>
+      <span class="tagline">Auto-timing tracks for xLights</span>
+      <span class="spacer"></span>
+      <span class="privacy" title="All processing happens locally in this browser tab.">Runs locally. Your audio never leaves this device.</span>
+    </header>
+
+    <main>
+      <section id="screen-drop" class="screen">
+        <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Choose an audio file">
+          <svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" d="M6 30v-6M12 34V18M18 38V12M24 32v-8M30 36V14M36 30V20M42 28v-4"/></svg>
+          <p class="drop-title">Drop a song here</p>
+          <p class="muted">or click to choose a file · MP3, WAV, FLAC, OGG, M4A</p>
+          <p class="muted small">Already have stems? Drop them together with the song (files named drums, bass, vocals, other).</p>
+          <input id="file-input" type="file" multiple accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac,.opus" hidden />
+        </div>
+        <section class="setup" aria-labelledby="setup-title">
+          <div class="setup-head">
+            <h2 id="setup-title">What to make</h2>
+            <label class="field inline">
+              <span class="field-label">Timing grid</span>
+              <select id="grid-start">
+                <option value="50" selected>50 ms (xLights default)</option>
+                <option value="25">25 ms</option>
+              </select>
+            </label>
+          </div>
+          <p class="setup-base">
+            <span class="model-ok" aria-hidden="true">✓</span>
+            <span><strong>Always included:</strong> Sections, Phrases, Bars, Beats, Onsets and Energy. No download needed.</span>
+          </p>
+          <p class="muted small setup-intro">
+            The options below run AI models in this browser. Each model downloads once, is stored in this browser,
+            and loads in seconds after that. You can download them now so your first song doesn’t have to wait.
+          </p>
+          <div id="gpu-note" class="gpu-note small" hidden></div>
+          <ul id="model-list" class="model-list"></ul>
+          <div class="setup-foot">
+            <p id="model-summary" class="small" aria-live="polite"></p>
+            <div class="row">
+              <button id="songs-clear" class="btn small" type="button" title="Stems, vocals and lyrics saved for songs you've processed, reused when you load the same song again" hidden>Clear saved song results</button>
+              <button id="models-remove" class="btn small" type="button" hidden>Remove downloaded models</button>
+              <button id="models-stop" class="btn small" type="button" hidden>Stop</button>
+              <button id="models-download" class="btn primary" type="button">Download selected models</button>
+            </div>
+          </div>
+          <p id="model-error" class="error small" role="alert" hidden></p>
+        </section>
+        <details class="lyrics-box" id="lyrics-box">
+          <summary>Paste the lyrics <span class="muted">(optional, gives the best word, syllable and phoneme timing)</span></summary>
+          <textarea id="lyrics-text" rows="8" spellcheck="false" placeholder="One lyric line per line, in the order they're sung, repeats included. [Chorus] tags and blank lines are ignored."></textarea>
+          <p class="muted small">With stems on, the lyrics are aligned to the vocals letter by letter (the precise vocal timing model).</p>
+        </details>
+      </section>
+
+      <section id="screen-progress" class="screen" hidden>
+        <div class="progress-card">
+          <p id="progress-stage">Working…</p>
+          <progress id="progress-bar" max="1" value="0"></progress>
+          <div id="progress-error" class="error" hidden>
+            <p id="progress-error-text"></p>
+            <button class="btn" onclick="location.reload()">Start over</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="screen-editor" class="screen editor" hidden>
+        <div class="toolbar">
+          <button id="play" class="icon-btn play" aria-label="Play" title="Play / pause (Space)">
+            <svg class="i-play" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 4.5v15l13-7.5z"/></svg>
+            <svg class="i-pause" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+          </button>
+          <span id="time" class="mono time">0:00.00 / 0:00.00</span>
+          <span class="sep"></span>
+          <button id="zoom-out" class="btn small" title="Zoom out (−)">−</button>
+          <button id="zoom-in" class="btn small" title="Zoom in (+)">+</button>
+          <button id="zoom-fit" class="btn small" title="Fit whole song">Fit</button>
+          <span class="sep"></span>
+          <label class="vol" title="Song volume">Song <input id="music-vol" type="range" min="0" max="1" step="0.05" value="1" /></label>
+          <label class="vol" title="Audition click volume">Clicks <input id="click-vol" type="range" min="0" max="1.5" step="0.05" value="1" /></label>
+          <span id="stem-strip" class="stem-strip" hidden></span>
+          <span class="spacer"></span>
+          <span class="file-info"><strong id="file-name"></strong> <span id="file-meta" class="muted"></span></span>
+          <button id="edit-lyrics" class="btn small" title="Paste or correct the lyrics and align them again">Lyrics…</button>
+          <button id="rerun" class="btn small" title="Process this song again from scratch, ignoring results saved from earlier runs">Re-run</button>
+          <button id="new-file" class="btn small">New song</button>
+        </div>
+        <section id="status" class="status" hidden>
+          <div class="status-head">
+            <span id="status-icon" class="status-icon" aria-hidden="true"></span>
+            <div class="status-text">
+              <strong id="status-title" role="status"></strong>
+              <span id="status-sub" class="muted small"></span>
+            </div>
+            <progress id="status-bar" max="1" value="0"></progress>
+            <button id="status-rerun" class="btn small" type="button" title="Process this song again, ignoring results saved from earlier runs" hidden>Re-run from scratch</button>
+            <button id="status-toggle" class="btn small" type="button" aria-expanded="false" aria-controls="status-steps">Details</button>
+            <button id="stem-cancel" class="btn small" type="button">Cancel</button>
+            <button id="status-dismiss" class="icon-btn" type="button" aria-label="Dismiss" title="Dismiss">✕</button>
+          </div>
+          <ol id="status-steps" class="status-steps"></ol>
+          <p id="stem-hint" class="muted small status-hint" hidden></p>
+        </section>
+        <p class="hint muted small">Scroll to pan, Ctrl/⌘ + scroll to zoom, click to seek. Turn on <span class="kbd">🎧</span> on a track to hear clicks on its marks while playing.</p>
+
+        <details id="lights-panel" class="lights-panel" open>
+          <summary>Light preview <span class="muted small">· one light per track checked for export</span></summary>
+          <div id="lights" class="lights"></div>
+        </details>
+
+        <div class="timeline">
+          <div id="lane-heads" class="lane-heads"></div>
+          <div id="lane-canvas" class="lane-canvas"></div>
+        </div>
+
+        <div class="panels">
+          <section class="panel">
+            <h2>Track</h2>
+            <div id="inspector"></div>
+          </section>
+          <section class="panel">
+            <h2>Export</h2>
+            <p id="export-count" class="muted small"></p>
+            <p id="export-busy" class="notice small" hidden>Still processing: more tracks are on the way. Exporting now leaves them out.</p>
+            <label class="field inline">
+              <span class="field-label">Grid</span>
+              <select id="grid">
+                <option value="50" selected>50 ms</option>
+                <option value="25">25 ms</option>
+              </select>
+            </label>
+            <div class="row actions">
+              <button id="export-xtiming" class="btn primary">Download .xtiming</button>
+              <button id="export-zip" class="btn">Download all (.zip, one per track)</button>
+            </div>
+            <p class="muted small">
+              One <code>.xtiming</code> file can hold every selected track. In xLights, open your sequence and use
+              <em>Import Timing Track</em> (right-click a timing track name) to bring them in.
+              Set the grid to match your sequence timing.
+            </p>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="lyrics-dialog" class="lyrics-dialog">
+      <form method="dialog">
+        <h2>Lyrics</h2>
+        <p class="muted small">One lyric line per line, in the order they're sung, repeats included. Fix any misheard words and align again; the alignment reuses this song's analysis, so it only takes a moment.</p>
+        <textarea id="lyrics-edit" rows="16" spellcheck="false"></textarea>
+        <p id="lyrics-dialog-note" class="muted small"></p>
+        <div class="row actions">
+          <button value="cancel" class="btn">Cancel</button>
+          <button id="lyrics-align" value="align" class="btn primary">Align lyrics</button>
+        </div>
+      </form>
+    </dialog>
+
+    <footer class="foot">
+      <span>Stemlight is free software under the <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>.</span>
+      <a href="https://github.com/Thulrus/stemlight">Source code</a>
+      <a href="../THIRD_PARTY_LICENSES.txt">Third-party licenses</a>
+      <span class="muted">Not affiliated with the xLights project.</span>
+    </footer>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

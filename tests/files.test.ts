@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stemFromFileName } from '../src/audio/decode';
+import { stemFromFileName } from '@stemlight/audio/decode';
 
 describe('stemFromFileName', () => {
   it.each([

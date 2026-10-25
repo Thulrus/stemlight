@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import * as ort from 'onnxruntime-node';
 import { it } from 'vitest';
-import { RF_SR, separateRoformer, VOCALS_MODEL } from '../src/separation/roformer';
+import { RF_SR, separateRoformer, VOCALS_MODEL } from '../apps/timing/src/separation/roformer';
 import { decodeStereo, wavBytes } from '../tests/audio';
 
 // SONGS_DIR=<dir> separates another folder (e.g. fixtures/private/jamendo/mp3/); ORT_EP=cuda uses

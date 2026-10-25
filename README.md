@@ -1,10 +1,17 @@
 # Stemlight
 
+Free, in-browser tools for xLights sequencing, published at one site with a landing page:
+
+- **Stemlight Timing** (`/timing/`): auto-timing tracks from a song. Described below.
+- **Stemlight Composer** (`/composer/`): a fast sequence editor that writes `.xsq` files for xLights. See [Composer](#composer) and [Stemlight Composer Spec.md](Stemlight%20Composer%20Spec.md).
+
+## Stemlight Timing
+
 **Auto-timing tracks for xLights.** Drop in a song and get timing tracks to import into your xLights sequence: song structure (sections, phrases, bars, beats), and one track per musical part from stem separation (vocal phrases, syllables and notes, backing vocals, kick, snare, hats, bass notes, the instruments' melody), and, with lyrics, words, labeled syllables and a phrases/words/phonemes track for singing faces. Marks have a start *and* an end: a sung note lasts as long as it's sung, so an effect snapped to it needs no fixing. Any track can be split between several props (alternate beats between two pumpkins, or low notes on one and high notes on another).
 
 Everything runs in your browser. There's no server and your audio never leaves your machine.
 
-## Status
+### Status
 
 Milestones from [SPEC.md](SPEC.md):
 
@@ -19,7 +26,7 @@ Milestones from [SPEC.md](SPEC.md):
 - [ ] **M3**: light editing, …
 - [ ] **M4**: session save/load, presets
 
-## Using it
+### Using it
 
 1. Open the app and drop an audio file. Structure tracks appear in a couple of seconds.
 2. With **Separate stems** on, the song is split into drums, bass, vocals and other in the background, and the instrument tracks are added when it's done. The model (~170 MB) downloads once and is cached, and the stems for each song are cached too. Measured on a desktop: with WebGPU (RTX 3060) a 1:43 song separates in about 25 s; CPU-only (8 WASM threads) takes a little longer than the song itself (a 2:27 song took about 3 minutes).
@@ -38,18 +45,38 @@ Milestones from [SPEC.md](SPEC.md):
 3. Download one `.xtiming` with all selected tracks, or a zip with one file per track.
 4. In xLights, import it with **Import Timing Track**.
 
-### Browsers
+#### Browsers
 
 Everything works in current Chrome, Edge and Firefox. GPU acceleration needs WebGPU: Chrome and Edge have it; Firefox on Linux doesn't ship it in stable releases yet, so there everything runs on the CPU (the app says so). The model downloads are cached by the browser, as are each song's stems and lyrics.
+
+## Composer
+
+Drop a song (plus, optionally, `xlights_rgbeffects.xml` and `.xtiming` files, or **Quick beats** for beats, bars, phrases and sections in seconds), then lay out effects on a timeline where everything snaps to the active timing track. Export a `.xsq`, open it in xLights, fine-tune and render.
+
+Status (milestones from the composer spec):
+
+- [x] **C0**: `.xsq` writer checked against a real xLights (2026.19): sequences open without warnings and render frame-exactly (`npm run tool:xlights`)
+- [x] **R0**: repo split into apps and shared packages, one build with three pages
+- [x] **C1**: start screen with layout and timing import, row list, timeline with timing lanes, drag/double-click/number-key creation with snapping, select/move/resize/duplicate/delete, fades, nudges, split/merge, copy/paste, inspector, unlimited undo/redo, autosave, `.xsq` export of nine curated effects, row-light preview
+- [ ] **C2**: Paint mode, sections and apply-to-matching-sections, recipes, fill helpers, chase generator, mirror, palette editing
+- [ ] **C3**: Record mode, bindings, Send to Composer from the timing app
+- [ ] **C4**: `.xsq` import with opaque effects and round trips, virtual row mapping, project and recipe files
+- [ ] **C5**: approximate pixel preview, keyboard remapping, tutorial
+
+Effect settings (key names, value formats, defaults) come from xLights' own effect metadata (`packages/xlights/metadata/`, from xLights 2026.17), and the tests reproduce the settings strings and sequences of the fixtures byte for byte. Colors come from a color set (Basics, Christmas, Halloween, Patriotic, Valentine, Spring pastels; 6-10 colors each, editable per project): click a color to use it, Shift+click to add more for washes and chases. Single-color props (relay channels, single-color strings) only light up in white or their own color in xLights, so effects on them keep to colors they can show, and export warns about any that can't.
+
+The fastest way to lay effects down: click a spot on a row, then press `D` to drop the brush on that beat (keep pressing to fill beat after beat), or a number key to drop a preset (`2` is Fade out: full brightness fading to zero over the effect). Set the brush up in the inspector (effect, brightness, fades, color) and press Shift+number to keep it on that key. Press `?` in the editor for every shortcut. Projects are saved in the browser (IndexedDB) after every change.
 
 ## Development
 
 ```sh
 npm install
-npm run dev        # local dev server
+npm run dev        # dev server: / (landing), /timing/, /composer/
 npm test           # unit tests + benchmark
-npm run build      # static build in dist/
+npm run build      # static build in dist/ (all three pages)
 ```
+
+`npm run tool:xlights` (with `XLIGHTS=/path/to/xLights.AppImage`) renders sequences the composer writes with a real, headless xLights and checks which channels light up on which frames. xLights runs sandboxed: temporary `HOME`, settings and show folder, so your own xLights setup is never touched.
 
 ### Fixtures and benchmark
 
@@ -58,7 +85,7 @@ npm run build      # static build in dist/
 Benchmarks need copyrighted audio, which stays out of git in `fixtures/private/`:
 
 - `tests/eval.test.ts` compares Bars/Beats/Sections with xLights' own, given the song in `fixtures/private/`.
-- `tests/bench.test.ts` (`npm run bench`) scores the tracks against five hand-made sequences in `fixtures/`. Each target is a group of props that follows one musical part, scored against the tracks meant to serve it (the best of them counts). Props whose effects tile a part are scored on start *and* end (both within 100 ms, 250 ms for whole phrases): a mark with the right start and the wrong length still has to be fixed by hand. Props that flash for a fixed short time are scored on starts. The cases: *Cara Mia Addio* (the lead soprano note by note, and an accompaniment alternated between two pumpkins), *Candy Girl* (lead, backing group, alternating beats, backing phrases), *Grim Grinning Ghosts* (syllable flashes, sung lines), the pumpkins in *This Is Halloween* and the drum circles in the Marilyn Manson *This Is Halloween*. It needs stems in `fixtures/private/stems/<song>/`, which `npm run tool:separate` creates from the songs in `example_data/` with the same separation code the browser runs, using `onnxruntime-node` and the model files in `fixtures/private/models/` (from https://huggingface.co/webnn/stem-separator). `VOCALS=vocals_hq` uses the RoFormer vocals (`npm run tool:vocals-hq`), `LEAD=1` adds lead/backing separation (`npm run tool:lead`), and the character model's output comes from `tools/emissions.test.ts`. Basic Pitch frames are computed and cached on first use. The app and the benchmark build tracks with the same code (`src/analysis/build.ts`).
+- `tests/bench.test.ts` (`npm run bench`) scores the tracks against five hand-made sequences in `fixtures/`. Each target is a group of props that follows one musical part, scored against the tracks meant to serve it (the best of them counts). Props whose effects tile a part are scored on start *and* end (both within 100 ms, 250 ms for whole phrases): a mark with the right start and the wrong length still has to be fixed by hand. Props that flash for a fixed short time are scored on starts. The cases: *Cara Mia Addio* (the lead soprano note by note, and an accompaniment alternated between two pumpkins), *Candy Girl* (lead, backing group, alternating beats, backing phrases), *Grim Grinning Ghosts* (syllable flashes, sung lines), the pumpkins in *This Is Halloween* and the drum circles in the Marilyn Manson *This Is Halloween*. It needs stems in `fixtures/private/stems/<song>/`, which `npm run tool:separate` creates from the songs in `example_data/` with the same separation code the browser runs, using `onnxruntime-node` and the model files in `fixtures/private/models/` (from https://huggingface.co/webnn/stem-separator). `VOCALS=vocals_hq` uses the RoFormer vocals (`npm run tool:vocals-hq`), `LEAD=1` adds lead/backing separation (`npm run tool:lead`), and the character model's output comes from `tools/emissions.test.ts`. Basic Pitch frames are computed and cached on first use. The app and the benchmark build tracks with the same code (`apps/timing/src/analysis/build.ts`).
   `tools/prop-matrix.test.ts` lists, for every prop, which tracks follow it best.
 
   Mean score per song, before and after the redesign around musical parts (old: onset- and level-based syllables and phrases, notes from Basic Pitch's own note decoding):
@@ -110,18 +137,27 @@ npm run bench                     # stem tracks vs hand-made sequences
 ### Layout
 
 ```
-src/core       Track/Mark types, grid quantization, .xtiming parsing, splitting a track between props
-src/dsp        FFT, spectral features, onsets, tempo, beat tracking, downbeats, structure
-src/analysis   features -> Track builders (build.ts: every track, shared by the app and the benchmark), analysis worker
-src/separation HTDemucs and RoFormer pipelines (vocals, lead/backing), separation worker
-src/lyrics     Whisper transcription (vocal-aware windows), lyrics worker
-src/align      lyrics → letters, CTC forced alignment, syllables and phonemes (CMUdict), greedy syllables
-src/notes      Basic Pitch notes and the lead line
-src/export     .xtiming and zip writers
-src/audio      decoding, playback with stem mute/solo and audition clicks
-src/storage    IndexedDB cache for the model and per-song stems
-src/ui         timeline canvas, light preview and app shell
+apps/index.html          landing page
+apps/timing/src          the timing app:
+  dsp                    FFT, spectral features, onsets, tempo, beat tracking, downbeats, structure
+  analysis               features -> Track builders (build.ts: every track, shared by the app and the benchmark), analysis worker
+  separation             HTDemucs and RoFormer pipelines (vocals, lead/backing), separation worker
+  lyrics                 Whisper transcription (vocal-aware windows), lyrics worker
+  align                  lyrics → letters, CTC forced alignment, syllables and phonemes (CMUdict), greedy syllables
+  notes                  Basic Pitch notes and the lead line
+  ui                     app shell
+apps/composer/src        the composer:
+  model                  project types, undoable changes (Tx), edit operations, snapping, export
+  state                  project store (undo/redo, selection), IndexedDB persistence
+  ui                     start screen, timeline canvas, row list, inspector, effect bar, preview, dialogs
+packages/core            Track/Mark types, grid quantization, .xtiming read/write, zip, splitting a track between props
+packages/audio           decoding, playback (speed, stem mute/solo, audition clicks)
+packages/timeline        the timing app's timeline canvas and light preview
+packages/storage         IndexedDB stores (per app, plus a shared one for audio)
+packages/xlights         XML reader, layout parser, .xsq reader/writer, effect settings and palettes, effect metadata
 ```
+
+Packages are imported as `@stemlight/<name>/<file>` (path aliases in `vite.config.ts` and `tsconfig.json`; one `package.json`).
 
 Everything downstream of analysis only knows `Track`s, so new extractors plug in without touching the editor or exporters.
 

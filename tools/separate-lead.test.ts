@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import * as ort from 'onnxruntime-node';
 import { it } from 'vitest';
-import { LEAD_MODEL, RF_SR, separateRoformer } from '../src/separation/roformer';
+import { LEAD_MODEL, RF_SR, separateRoformer } from '../apps/timing/src/separation/roformer';
 import { decodeStereo, wavBytes } from '../tests/audio';
 
 const SONGS = process.env.SONGS_DIR ? process.env.SONGS_DIR.replace(/\/?$/, '/') : new URL('../example_data/', import.meta.url).pathname;

@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { mixTracks } from '../src/analysis/analyze';
-import { parseTimingTracks } from '../src/core/parseXTiming';
-import { ANALYSIS_SR, computeFeatures } from '../src/dsp/features';
-import { eventF } from '../src/eval/metrics';
+import { mixTracks } from '../apps/timing/src/analysis/analyze';
+import { parseTimingTracks } from '@stemlight/core/parseXTiming';
+import { ANALYSIS_SR, computeFeatures } from '../apps/timing/src/dsp/features';
+import { eventF } from '../apps/timing/src/eval/metrics';
 import { decodeWithFfmpeg, privateAudio } from './audio';
 
 const audio = privateAudio();

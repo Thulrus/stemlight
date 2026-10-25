@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vitest/config';
+
+const repo = fileURLToPath(new URL('.', import.meta.url));
+const at = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 /** Serve and emit the repo's THIRD_PARTY_LICENSES so the footer link works in dev and prod. */
 function thirdPartyLicenses(): Plugin {
@@ -24,13 +28,43 @@ function thirdPartyLicenses(): Plugin {
 // adds these headers; locally the dev and preview servers send them directly.
 const isolation = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
 
+// Three pages from one build: the landing page (/), the timing app (/timing/) and the
+// composer (/composer/). Separate HTML entries rather than a router, so deep links work on Pages.
 export default defineConfig({
+  root: at('./apps'),
+  publicDir: at('./public'),
+  envDir: repo,
   base: process.env.STEMLIGHT_BASE ?? './',
+  resolve: {
+    alias: {
+      '@stemlight/core': at('./packages/core'),
+      '@stemlight/audio': at('./packages/audio'),
+      '@stemlight/storage': at('./packages/storage'),
+      '@stemlight/timeline': at('./packages/timeline'),
+      '@stemlight/xlights': at('./packages/xlights'),
+      '@timing': at('./apps/timing/src'),
+    },
+  },
+  build: {
+    outDir: at('./dist'),
+    emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        landing: at('./apps/index.html'),
+        timing: at('./apps/timing/index.html'),
+        composer: at('./apps/composer/index.html'),
+      },
+    },
+  },
   server: { headers: isolation },
   preview: { headers: isolation },
   optimizeDeps: { exclude: ['onnxruntime-web'] },
   plugins: [thirdPartyLicenses()],
   worker: { format: 'es' },
-  // Dev tools in tools/ are vitest files too, but only run on request (STEMLIGHT_TOOLS=1).
-  test: { include: [process.env.STEMLIGHT_TOOLS ? 'tools/**/*.test.ts' : 'tests/**/*.test.ts'], testTimeout: 120_000 },
+  test: {
+    root: repo,
+    // Dev tools in tools/ are vitest files too, but only run on request (STEMLIGHT_TOOLS=1).
+    include: [process.env.STEMLIGHT_TOOLS ? 'tools/**/*.test.ts' : 'tests/**/*.test.ts'],
+    testTimeout: 120_000,
+  },
 });

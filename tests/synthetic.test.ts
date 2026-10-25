@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { mixTracks } from '../src/analysis/analyze';
-import { ANALYSIS_SR, computeFeatures } from '../src/dsp/features';
-import { pickOnsets } from '../src/dsp/rhythm';
+import { mixTracks } from '../apps/timing/src/analysis/analyze';
+import { ANALYSIS_SR, computeFeatures } from '../apps/timing/src/dsp/features';
+import { pickOnsets } from '../apps/timing/src/dsp/rhythm';
 import { synthLoop } from './synth';
 
 describe('synthetic loop', () => {

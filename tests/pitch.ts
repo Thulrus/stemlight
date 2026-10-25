@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as ort from 'onnxruntime-node';
-import { basicPitchFrames, KEYS, type PitchFrames } from '../src/notes/basicPitch';
+import { basicPitchFrames, KEYS, type PitchFrames } from '../apps/timing/src/notes/basicPitch';
 import { readWav16, STEMS_DIR } from './audio';
 
 let session: Promise<ort.InferenceSession> | undefined;
@@ -19,7 +19,7 @@ export async function cachedPitch(song: string, stem: string, audio?: Float32Arr
   }
   const wav = `${STEMS_DIR}${song}/${stem}.wav`;
   if (!audio && !existsSync(wav)) return undefined;
-  session ??= ort.InferenceSession.create(new URL('../src/notes/basic-pitch.onnx', import.meta.url).pathname);
+  session ??= ort.InferenceSession.create(new URL('../apps/timing/src/notes/basic-pitch.onnx', import.meta.url).pathname);
   const f = await basicPitchFrames(await session, ort.Tensor as never, audio ?? readWav16(wav).samples);
   const T = f.times.length;
   const out = new Float32Array(1 + T + 2 * T * KEYS);

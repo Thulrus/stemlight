@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { InferenceSession } from 'onnxruntime-node';
 import * as ort from 'onnxruntime-node';
-import { ctcEmissions, W2V_SR } from '../src/align/acoustic';
-import type { Emissions } from '../src/align/ctc';
+import { ctcEmissions, W2V_SR } from '../apps/timing/src/align/acoustic';
+import type { Emissions } from '../apps/timing/src/align/ctc';
 import { STEMS_DIR } from './audio';
 
 export function load16k(path: string): Float32Array {

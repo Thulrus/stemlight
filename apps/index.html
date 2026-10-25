@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Stemlight: free, in-browser tools for xLights sequencing. Auto-timing tracks from your song, and a fast sequence composer." />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <title>Stemlight</title>
+    <script src="./coi-serviceworker.js"></script>
+    <style>
+      :root {
+        color-scheme: dark light;
+        --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e7e9ee; --dim: #9aa1ae; --accent: #f59e0b; --accent-2: #a78bfa;
+      }
+      @media (prefers-color-scheme: light) {
+        :root { --bg: #f6f7f9; --panel: #fff; --line: #dde1e8; --text: #16181d; --dim: #5b6271; --accent: #c2410c; --accent-2: #6d28d9; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      main { max-width: 960px; margin: 0 auto; padding: 56px 16px 32px; }
+      .brand { display: flex; align-items: center; gap: 12px; }
+      .brand h1 { margin: 0; font-size: 2rem; letter-spacing: -0.02em; }
+      .lede { color: var(--dim); font-size: 1.125rem; max-width: 640px; margin: 12px 0 40px; }
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+      .card { display: flex; flex-direction: column; gap: 8px; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: inherit; text-decoration: none; transition: border-color 0.15s, transform 0.15s; }
+      .card:hover, .card:focus-visible { border-color: var(--accent); transform: translateY(-2px); outline: none; }
+      .card h2 { margin: 0; font-size: 1.25rem; }
+      .card p { margin: 0; color: var(--dim); }
+      .card .go { margin-top: auto; padding-top: 12px; color: var(--accent); font-weight: 600; }
+      .card.composer .go { color: var(--accent-2); }
+      .card.composer:hover, .card.composer:focus-visible { border-color: var(--accent-2); }
+      .flow { margin: 40px 0 0; color: var(--dim); }
+      footer { max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--dim); font-size: 0.875rem; border-top: 1px solid var(--line); }
+      footer a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <img src="./favicon.svg" alt="" width="40" height="40" />
+        <h1>Stemlight</h1>
+      </div>
+      <p class="lede">Free tools for sequencing light shows in xLights. Everything runs in your browser: no accounts, and your audio never leaves your machine.</p>
+      <div class="cards">
+        <a class="card" href="./timing/">
+          <h2>Stemlight Timing</h2>
+          <p>Drop in a song and get timing tracks: sections, bars and beats, drums, bass, vocal phrases, syllables, notes and lyrics for singing faces.</p>
+          <span class="go">Make timing tracks →</span>
+        </a>
+        <a class="card composer" href="./composer/">
+          <h2>Stemlight Composer</h2>
+          <p>Lay out a sequence fast: effects snap to your timing tracks, everything has a keyboard shortcut and unlimited undo, and the result opens in xLights as a <code>.xsq</code>.</p>
+          <span class="go">Compose a sequence →</span>
+        </a>
+      </div>
+      <p class="flow">Typical flow: make timing tracks, compose the sequence, then fine-tune and render in xLights.</p>
+    </main>
+    <footer>
+      <span>Stemlight is free software under the <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>.</span>
+      <a href="https://github.com/Thulrus/stemlight">Source code</a>
+      <a href="./THIRD_PARTY_LICENSES.txt">Third-party licenses</a>
+      <span>Not affiliated with the xLights project.</span>
+    </footer>
+  </body>
+</html>

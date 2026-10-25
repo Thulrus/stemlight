@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { AlignedWord } from '../src/align/align';
-import { fuseEmissions, type Emissions } from '../src/align/ctc';
-import { greedySyllables } from '../src/align/greedy';
-import { lyricTracks, wordsFromAsr } from '../src/analysis/lyricTracks';
-import { DEFAULT_STEM_PARAMS } from '../src/analysis/stems';
-import { toXTiming } from '../src/export/xtiming';
-import { ALIGNER_VOCAB } from '../src/separation/model';
+import type { AlignedWord } from '../apps/timing/src/align/align';
+import { fuseEmissions, type Emissions } from '../apps/timing/src/align/ctc';
+import { greedySyllables } from '../apps/timing/src/align/greedy';
+import { lyricTracks, wordsFromAsr } from '../apps/timing/src/analysis/lyricTracks';
+import { DEFAULT_STEM_PARAMS } from '../apps/timing/src/analysis/stems';
+import { toXTiming } from '@stemlight/core/xtiming';
+import { ALIGNER_VOCAB } from '../apps/timing/src/separation/model';
 
 const span = (text: string, start: number, end: number) => ({ text, start, end });
 const p0 = { ...DEFAULT_STEM_PARAMS.lyrics, offsetMs: 0 };

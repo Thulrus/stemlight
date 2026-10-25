@@ -35,6 +35,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
+xLights effect metadata (Stemlight Composer) - GNU General Public License v3.0
+https://github.com/xLightsSequencer/xLights (resources/effectmetadata, tag 2026.17)
+------------------------------------------------------------------------------
+The composer bundles xLights' effect metadata files for the effects it can
+create (On, Color Wash, Twinkle, Shimmer, Bars, Single Strand, Spirals,
+Butterfly, Off), unmodified, in packages/xlights/metadata/. They describe each
+effect's setting names and defaults, so that sequences written by the composer
+match what xLights itself writes. xLights is Copyright the xLights
+contributors and licensed under the GNU General Public License v3.0
+(https://www.gnu.org/licenses/gpl-3.0.html), which is compatible with
+Stemlight's AGPL-3.0.
+
+------------------------------------------------------------------------------
 ONNX Runtime Web 1.31.0-dev.20260914 (runs the separation and lyrics models) - MIT License
 https://github.com/microsoft/onnxruntime
 ------------------------------------------------------------------------------
