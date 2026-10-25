@@ -1,17 +1,18 @@
 import type { Player } from '@stemlight/audio/player';
 import { defaultParams, effectDef, type EffectType } from '@stemlight/xlights/effects';
 import { parseLayout } from '@stemlight/xlights/layout';
+import { readTimingFile } from '@stemlight/xlights/timing';
 import type { ParamValue } from '@stemlight/xlights/settings';
 import * as ops from '../model/ops';
 import { colorName } from '../model/colors';
 import { colorsForRow } from '../model/export';
-import { makeRow, rowsFromLayout, uid } from '../model/project';
+import { makeRow, rowsFromLayout, sectionsFromTracks, timingTrack, uid } from '../model/project';
 import { activeBoundaries } from '../model/snap';
-import type { BrushState, Effect, Preset, Row, SnapMode } from '../model/types';
+import type { BrushState, Effect, Preset, Row, SnapMode, TimingTrack } from '../model/types';
 import { saveLastLayout, saveProject } from '../state/persist';
 import type { Store } from '../state/store';
 import { colorSetDialog, confirmDialog, exportDialog, keymapDialog, promptDialog, rowPickerDialog } from './dialogs';
-import { formatTime, h, icon, ICONS, isTyping, toast } from './dom';
+import { formatTime, h, icon, ICONS, ownsKey, toast } from './dom';
 import { brushName, EffectBar } from './effectbar';
 import { Inspector } from './inspector';
 import { Preview } from './preview';
@@ -44,8 +45,26 @@ export class Editor {
   private clip?: Clip;
   private raf = 0;
   private saveTimer = 0;
+  /** Bumped on every change; `savedEdit` is the last one known to be stored. */
+  private edits = 0;
+  private savedEdit = 0;
+  private warnedNotSaved = false;
+  /**
+   * Browsers cut off storage writes while a tab closes, so a save started then can be lost.
+   * With changes not yet stored, ask before leaving; the save finishes while the prompt shows.
+   */
+  private readonly onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (this.edits === this.savedEdit) return;
+    void this.saveNow();
+    e.preventDefault();
+  };
   private unsub: () => void;
   private readonly onKey = (e: KeyboardEvent) => this.key(e);
+  private readonly onDragOver = (e: DragEvent) => e.preventDefault();
+  private readonly onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer?.files.length) void this.importFiles([...e.dataTransfer.files]);
+  };
 
   constructor(root: HTMLElement, private readonly store: Store, private readonly player: Player, private readonly peaks: Peaks | undefined, private readonly onExit: () => void) {
     this.el = this.build();
@@ -55,6 +74,9 @@ export class Editor {
     store.onDirty = () => this.scheduleSave();
     store.onNotice = (m) => toast(m);
     window.addEventListener('keydown', this.onKey);
+    window.addEventListener('beforeunload', this.onBeforeUnload);
+    window.addEventListener('dragover', this.onDragOver);
+    window.addEventListener('drop', this.onDrop);
     player.onEnded = () => this.syncTransport();
     this.tick();
   }
@@ -62,6 +84,9 @@ export class Editor {
   destroy() {
     cancelAnimationFrame(this.raf);
     window.removeEventListener('keydown', this.onKey);
+    window.removeEventListener('beforeunload', this.onBeforeUnload);
+    window.removeEventListener('dragover', this.onDragOver);
+    window.removeEventListener('drop', this.onDrop);
     this.unsub();
     this.player.stop();
     this.timeline.destroy();
@@ -75,7 +100,7 @@ export class Editor {
     this.playBtn = h('button', { class: 'btn icon', title: 'Play / pause (Space)', onclick: () => this.togglePlay() }, icon(ICONS.play)) as HTMLButtonElement;
     this.timeEl = h('span', { class: 'mono time' });
     this.loopBtn = h('button', { class: 'btn icon', title: 'Loop (L): the selection, or the section at the playhead', onclick: () => this.toggleLoop() }, icon(ICONS.loop)) as HTMLButtonElement;
-    const speed = h('select', { title: 'Playback speed (pitch drops at slower speeds)', onchange: (e: Event) => this.player.setPlaybackRate(Number((e.target as HTMLSelectElement).value)) },
+    const speed = h('select', { title: 'Playback speed (pitch drops at slower speeds)', 'aria-label': 'Playback speed', onchange: (e: Event) => { const sel = e.target as HTMLSelectElement; this.player.setPlaybackRate(Number(sel.value)); sel.blur(); } },
       [1, 0.75, 0.5].map((r) => h('option', { value: r, selected: r === this.player.playbackRate }, `${r}×`)));
     this.snapSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Snapping' });
     this.dragSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Dragging on empty space' });
@@ -482,10 +507,49 @@ export class Editor {
     this.store.selectRows([]);
   }
 
-  private async openRowPicker() {
+  /** Files dropped on the editor: timing tracks are added, a layout opens the row picker. */
+  private async importFiles(files: File[]) {
+    for (const f of files) {
+      if (/\.(xtiming|xsq)$/i.test(f.name)) await this.importTiming(f);
+      else if (/\.xml$/i.test(f.name)) await this.openRowPicker(f);
+      else if (/\.(mp3|wav|ogg|oga|flac|m4a|aac|opus|webm)$/i.test(f.name) || f.type.startsWith('audio/')) toast('To use a different song, start a new project from Projects.');
+      else toast(`Not sure what to do with ${f.name}. Drop .xtiming, .xsq or xlights_rgbeffects.xml.`);
+    }
+  }
+
+  /** Add the timing tracks of a .xtiming or .xsq. A track with an existing name replaces it; a Sections track replaces the sections. */
+  private async importTiming(file: File) {
+    let read: ReturnType<typeof readTimingFile>;
+    try {
+      read = readTimingFile(await file.text());
+    } catch (err) {
+      toast(`Couldn't read ${file.name} (${(err as Error).message}).`);
+      return;
+    }
+    if (!read.length) { toast(`There are no timing tracks in ${file.name}.`); return; }
+    const p = this.store.project;
+    const source = /\.xsq$/i.test(file.name) ? 'xsq' : 'xtiming';
+    const incoming = read.map((t) => timingTrack(t.name, t.layers.map((l) => l.map((x) => ({ start: x.startMs, end: x.endMs, label: x.label }))), source, p.frameMs));
+    const sections = sectionsFromTracks(incoming);
+    const tracks: TimingTrack[] = [...p.timingTracks];
+    for (const t of incoming) {
+      if (sections.length && /^sections?$/i.test(t.name.trim())) continue;
+      const i = tracks.findIndex((x) => x.name === t.name);
+      if (i >= 0) tracks[i] = { ...t, id: tracks[i].id };
+      else tracks.push(t);
+    }
+    this.store.edit(`Import ${file.name}`, (tx) => {
+      tx.setField('timingTracks', tracks);
+      if (sections.length) tx.setField('sections', sections);
+    });
+    if (!this.store.project.view.activeTrackId && tracks.length) this.store.setView({ activeTrackId: tracks[0].id });
+    toast(`${read.length} timing track${read.length > 1 ? 's' : ''} from ${file.name}`);
+  }
+
+  private async openRowPicker(dropped?: File) {
     let layout = this.store.project.layout;
-    if (!layout) {
-      const file = await pickFile('.xml');
+    if (!layout || dropped) {
+      const file = dropped ?? await pickFile('.xml');
       if (!file) return;
       try {
         layout = parseLayout(await file.text());
@@ -597,7 +661,7 @@ export class Editor {
   // ---------- keyboard ----------
 
   private key(e: KeyboardEvent) {
-    if (isTyping(e) || document.querySelector('dialog[open]')) return;
+    if (ownsKey(e) || document.querySelector('dialog[open]')) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key;
     const store = this.store;
@@ -659,6 +723,7 @@ export class Editor {
         return;
       }
       case 'Escape': this.timeline.cancelDrag(); store.select([]); store.selectRows([]); return;
+      case 'Home': handled(); this.player.seek(0); this.preview.invalidate(); return;
       case 'Delete': case 'Backspace': handled(); if (ids.length) store.edit(ids.length > 1 ? 'Delete effects' : 'Delete effect', (tx) => { ops.remove(tx, ids); return []; }); return;
       case 'ArrowLeft': case 'ArrowRight': {
         handled();
@@ -713,16 +778,26 @@ export class Editor {
   // ---------- saving ----------
 
   private scheduleSave() {
+    this.edits++;
     this.saveEl.textContent = 'Saving…';
     clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => void this.saveNow(), 1000);
+    // Short, so little is ever waiting to be stored when the tab closes.
+    this.saveTimer = window.setTimeout(() => void this.saveNow(), 400);
   }
 
   async saveNow() {
     clearTimeout(this.saveTimer);
+    const upTo = this.edits;
     const ok = await saveProject(this.store.project, this.store.history, thumbnail(this.store));
-    this.saveEl.textContent = ok ? 'Saved' : 'Not saved';
+    if (ok) this.savedEdit = Math.max(this.savedEdit, upTo);
+    const current = this.savedEdit === this.edits;
+    this.saveEl.textContent = !ok ? 'Not saved' : current ? 'Saved' : 'Saving…';
+    this.saveEl.classList.toggle('err', !ok);
     this.saveEl.title = ok ? 'Saved in this browser' : 'This browser refused to store the project (private window or storage full). Export to keep your work.';
+    if (!ok && !this.warnedNotSaved) {
+      this.warnedNotSaved = true;
+      toast('This browser isn’t saving the project (private window or full storage). Export a .xsq to keep your work.', undefined, 8000);
+    }
   }
 }
 

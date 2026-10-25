@@ -129,6 +129,20 @@ type TrackState = {
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
+/**
+ * Whether the focused control needs this key itself: text fields take every key, sliders
+ * their arrow keys, checkboxes Space. Anything else (a slider just dragged, a button just
+ * clicked) leaves Space and the shortcuts to the app.
+ */
+function ownsKey(e: KeyboardEvent) {
+  const t = e.target as HTMLElement;
+  if (t.closest('textarea, select, [contenteditable]')) return true;
+  if (!(t instanceof HTMLInputElement)) return false;
+  if (t.type === 'range') return /^(Arrow|Page|Home|End)/.test(e.key);
+  if (t.type === 'checkbox' || t.type === 'radio') return e.key === ' ';
+  return t.type !== 'button' && t.type !== 'color';
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> & { class?: string } = {}, ...children: (Node | string)[]) {
   const e = document.createElement(tag);
   const { class: cls, ...rest } = props;
@@ -180,6 +194,8 @@ export class App {
   private wantStems = true;
   private gridMs: GridMs = 50;
   private selectedId?: string;
+  /** The last deleted track, so the inspector can offer to bring it back. */
+  private lastDeleted?: { state: TrackState; index: number };
   private auditionId?: string;
   private fileName = '';
   private duration = 0;
@@ -206,14 +222,21 @@ export class App {
 
     this.bindDrop();
     this.bindToolbar();
-    $<HTMLSelectElement>('#grid').addEventListener('change', (e) => this.setGrid(Number((e.target as HTMLSelectElement).value) as GridMs));
+    $<HTMLSelectElement>('#grid').addEventListener('change', (e) => {
+      const sel = e.target as HTMLSelectElement;
+      this.setGrid(Number(sel.value) as GridMs);
+      sel.blur(); // so Space plays again
+    });
     $<HTMLSelectElement>('#grid-start').addEventListener('change', (e) => this.setGrid(Number((e.target as HTMLSelectElement).value) as GridMs));
     $('#export-xtiming').addEventListener('click', () => this.exportCombined());
     $('#export-zip').addEventListener('click', () => this.exportZip());
     $('#new-file').addEventListener('click', () => {
-      if (this.separating && !confirm('This song is still being processed. Stop and start a new song?')) return;
+      if (!this.confirmLeave()) return;
       this.cancelSeparation();
       this.endSteps('Cancelled');
+      // The pasted lyrics belonged to the last song.
+      $<HTMLTextAreaElement>('#lyrics-text').value = '';
+      $<HTMLDetailsElement>('#lyrics-box').open = false;
       this.show('drop');
     });
     $('#stem-cancel').addEventListener('click', () => this.cancelSeparation());
@@ -242,6 +265,11 @@ export class App {
     if (screen !== 'editor') this.player.pause();
     if (screen === 'editor') this.timeline.render();
     if (screen === 'drop') void this.refreshModels();
+  }
+
+  /** Ask before dropping a song that is still being processed. */
+  private confirmLeave() {
+    return !this.separating || confirm('This song is still being processed. Stop and start a new song?');
   }
 
   // ---- processing options and models -------------------------------------------------
@@ -369,10 +397,11 @@ export class App {
         ? `✓ All ${selected.length} selected model${selected.length > 1 ? 's are' : ' is'} downloaded. Songs start processing right away.`
         : `${formatMB(missingBytes)} still to download for the selected options. This happens automatically the first time a song needs it, or you can do it now.`;
     const btn = $<HTMLButtonElement>('#models-download');
-    btn.disabled = dl.busy || !missing.length;
+    btn.disabled = dl.busy;
+    btn.hidden = !dl.busy && !missing.length;
     btn.textContent = dl.busy
       ? `Downloading ${dl.current ? MODELS.find((m) => m.id === dl.current!.id)!.model : ''}…`
-      : missing.length ? `Download selected (${formatMB(missingBytes)})` : 'Selected models downloaded';
+      : `Download selected (${formatMB(missingBytes)})`;
     $('#models-stop').hidden = !dl.busy;
     $('#models-remove').hidden = dl.busy || !this.cached.size;
     const clear = $('#songs-clear');
@@ -413,7 +442,9 @@ export class App {
     }
     document.addEventListener('drop', (e) => {
       const files = [...((e as DragEvent).dataTransfer?.files ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(mp3|wav|flac|ogg|m4a|aac|opus)$/i.test(f.name));
-      if (files.length) void this.load(files);
+      if (!files.length) return;
+      if (!$('#screen-editor').hidden && !this.confirmLeave()) return;
+      void this.load(files);
     });
   }
 
@@ -456,6 +487,7 @@ export class App {
       this.timeline.cursor = 0;
       this.tracks = [];
       this.deleted.clear();
+      this.lastDeleted = undefined;
       this.selectedId = undefined;
       this.auditionId = 'mix-beats';
       this.params = defaultParams();
@@ -1071,6 +1103,7 @@ export class App {
     const first = this.tracks.length === 0;
     this.mergeTracks(msg.tracks);
     $('#file-name').textContent = this.fileName;
+    $('#file-name').title = this.fileName;
     $('#file-meta').textContent = `${formatTime(msg.duration)} · ${msg.bpm.toFixed(1)} BPM`;
     this.show('editor');
     if (first) this.timeline.fit();
@@ -1111,13 +1144,13 @@ export class App {
     $<HTMLInputElement>('#music-vol').addEventListener('input', (e) => this.player.setMusicVolume(Number((e.target as HTMLInputElement).value)));
     $<HTMLInputElement>('#click-vol').addEventListener('input', (e) => this.player.setClickVolume(Number((e.target as HTMLInputElement).value)));
     document.addEventListener('keydown', (e) => {
-      if ($('#screen-editor').hidden) return;
-      const target = e.target as HTMLElement;
-      if (target.closest('input, select, textarea, [contenteditable]')) return;
+      if ($('#screen-editor').hidden || document.querySelector('dialog[open]') || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (ownsKey(e)) return;
       if (e.key === ' ') { e.preventDefault(); this.togglePlay(); }
-      else if (e.key === 'Home') { this.timeline.onSeek?.(0); }
+      else if (e.key === 'Home') { e.preventDefault(); this.timeline.onSeek?.(0); }
       else if (e.key === '+' || e.key === '=') this.timeline.zoom(1.5);
       else if (e.key === '-') this.timeline.zoom(1 / 1.5);
+      else if (e.key === 'Escape' && this.selectedId) { this.selectedId = undefined; this.refresh(); }
     });
   }
 
@@ -1223,7 +1256,7 @@ export class App {
       );
       row.style.height = `${LANE_H}px`;
       row.style.setProperty('--hue', String(s.hue));
-      const select = () => { this.selectedId = id; this.refresh(); };
+      const select = () => { this.selectedId = id; this.lastDeleted = undefined; this.refresh(); };
       row.addEventListener('click', select);
       row.addEventListener('keydown', (e) => { if (e.key === 'Enter') select(); });
       heads.append(row);
@@ -1238,7 +1271,10 @@ export class App {
     const box = $('#inspector');
     const s = this.tracks.find((t) => t.track.id === this.selectedId);
     if (!s) {
-      box.replaceChildren(el('p', { class: 'muted' }, 'Select a track to rename it, tune its detection, or nudge it.'));
+      const gone = this.lastDeleted;
+      const restore = gone && el('div', { class: 'notice row' }, `Deleted “${gone.state.track.name}”.`,
+        Object.assign(el('button', { class: 'btn small' }, 'Undo'), { onclick: () => this.restoreDeleted() }));
+      box.replaceChildren(el('p', { class: 'muted' }, 'Click a track name to rename it, tune its detection, nudge it or split it between props.'), ...(restore ? [restore] : []));
       return;
     }
     const name = el('input', { type: 'text', value: s.track.name, class: 'text-input' });
@@ -1273,6 +1309,7 @@ export class App {
     };
     const del = el('button', { class: 'btn danger' }, 'Delete');
     del.onclick = () => {
+      this.lastDeleted = { state: s, index: this.tracks.indexOf(s) };
       this.tracks = this.tracks.filter((t) => t !== s);
       if (!s.track.id.includes('~')) this.deleted.add(s.track.id);
       if (this.auditionId === s.track.id) this.auditionId = undefined;
@@ -1288,6 +1325,17 @@ export class App {
       nudgeRow,
       el('div', { class: 'row actions' }, dup, del),
     );
+  }
+
+  /** Bring back the last deleted track, where it was. */
+  private restoreDeleted() {
+    const gone = this.lastDeleted;
+    if (!gone) return;
+    this.lastDeleted = undefined;
+    this.deleted.delete(gone.state.track.id);
+    this.tracks.splice(Math.min(gone.index, this.tracks.length), 0, gone.state);
+    this.selectedId = gone.state.track.id;
+    this.refresh();
   }
 
   /** Share the track among several props: export it as one track per channel. */

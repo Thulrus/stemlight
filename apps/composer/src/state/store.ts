@@ -70,7 +70,8 @@ export class Store {
     this.redoStack = [];
     this.selection = new Set(after);
     this.emit('project');
-    if (c.fields.rows) this.emit('rows');
+    // Rows and timing tracks change the layout (the lanes and rows on screen).
+    if (c.fields.rows || c.fields.timingTracks) this.emit('rows');
     this.onDirty?.();
     return c;
   }
@@ -89,7 +90,8 @@ export class Store {
     this.redoStack.push(c);
     this.selection = new Set((c.selection?.[0] ?? []).filter((id) => this.project.effects[id]));
     this.emit('project');
-    if (c.fields.rows) this.emit('rows');
+    // Rows and timing tracks change the layout (the lanes and rows on screen).
+    if (c.fields.rows || c.fields.timingTracks) this.emit('rows');
     this.onDirty?.();
     return c.label;
   }
@@ -101,7 +103,8 @@ export class Store {
     this.undoStack.push(c);
     this.selection = new Set((c.selection?.[1] ?? []).filter((id) => this.project.effects[id]));
     this.emit('project');
-    if (c.fields.rows) this.emit('rows');
+    // Rows and timing tracks change the layout (the lanes and rows on screen).
+    if (c.fields.rows || c.fields.timingTracks) this.emit('rows');
     this.onDirty?.();
     return c.label;
   }

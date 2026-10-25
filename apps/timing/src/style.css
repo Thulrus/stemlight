@@ -231,7 +231,9 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
 .vol { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
 .vol input { width: 80px; accent-color: var(--accent); }
-.file-info { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; }
+.file-info { display: flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 60ch; white-space: nowrap; }
+#file-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#file-meta { flex: none; }
 .hint { margin: -8px 2px 0; }
 .kbd { font-size: 11px; }
 
@@ -367,6 +369,7 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .notice { color: var(--warn); background: var(--warn-bg); padding: 6px 10px; border-radius: 6px; }
+.notice.row { justify-content: space-between; }
 
 .lane-pending { height: 34px; color: var(--text-dim); font-size: 12px; font-style: italic; cursor: default; gap: 8px; }
 .spinner {

@@ -1,7 +1,7 @@
 import type { LayoutModel, LayoutSnapshot } from '@stemlight/xlights/layout';
 import type { Change } from './change';
 import { copySets, DEFAULT_COLOR_SET } from './colors';
-import type { Effect, Preset, Project, Row, RowKind, Section, TimingTrack } from './types';
+import type { Effect, Mark, Preset, Project, Row, RowKind, Section, TimingTrack } from './types';
 
 let counter = 0;
 /** Short unique ids (time + counter + random), stable across sessions. */
@@ -70,6 +70,13 @@ export function rowsFromLayout(layout: LayoutSnapshot, pick?: Set<string>): Row[
 }
 
 /** Sections from a "Sections" timing track (Stemlight's or xLights'), if there is one. */
+/** A timing track from imported marks, snapped to the sequence's frames (every mark at least a frame long). */
+export function timingTrack(name: string, layers: Mark[][], source: TimingTrack['source'], frameMs: number): TimingTrack {
+  const snap = (t: number) => Math.round(t / frameMs) * frameMs;
+  const snapped = layers.map((l) => l.map((m) => ({ start: snap(m.start), end: Math.max(snap(m.start) + frameMs, snap(m.end)), label: m.label })));
+  return { id: uid('t'), name, marks: snapped[0] ?? [], layers: snapped.length > 1 ? snapped.slice(1) : undefined, source };
+}
+
 export function sectionsFromTracks(tracks: TimingTrack[]): Section[] {
   const t = tracks.find((x) => /^sections?$/i.test(x.name.trim()));
   if (!t) return [];

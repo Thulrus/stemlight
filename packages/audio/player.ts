@@ -115,7 +115,9 @@ export class Player {
 
   get currentTime(): number {
     if (!this.playing) return this.startOffset;
-    return Math.min(this.duration, this.startOffset + (this.ctx.currentTime - this.startCtxTime) * this.rate);
+    // Playback starts a moment after play() (startCtxTime is in the future); until then the
+    // position is the start point, not before it, so a quick pause doesn't drift backwards.
+    return Math.min(this.duration, this.startOffset + Math.max(0, this.ctx.currentTime - this.startCtxTime) * this.rate);
   }
 
   get playbackRate() { return this.rate; }

@@ -5,7 +5,7 @@ import type { Track } from '@stemlight/core/types';
 import { hashBytes } from '@stemlight/storage/idb';
 import { parseLayout, type LayoutSnapshot } from '@stemlight/xlights/layout';
 import { readTimingFile } from '@stemlight/xlights/timing';
-import { newProject, uid } from '../model/project';
+import { newProject, timingTrack } from '../model/project';
 import type { Mark, Project, TimingTrack } from '../model/types';
 import { deleteProject, loadLastLayout, recentProjects, saveAudio, saveLastLayout, saveProject, type RecentEntry } from '../state/persist';
 import { confirmDialog } from './dialogs';
@@ -171,11 +171,7 @@ export class StartScreen {
     const song = this.song;
     if (!song) return;
     const f = this.frameMs;
-    const snap = (t: number) => Math.round(t / f) * f;
-    const tracks: TimingTrack[] = [...this.tracks.values()].map((t) => {
-      const layers = t.layers.map((l) => l.map((m) => ({ start: snap(m.start), end: Math.max(snap(m.start) + f, snap(m.end)), label: m.label })));
-      return { id: uid('t'), name: t.name, marks: layers[0] ?? [], layers: layers.length > 1 ? layers.slice(1) : undefined, source: t.source };
-    });
+    const tracks: TimingTrack[] = [...this.tracks.values()].map((t) => timingTrack(t.name, t.layers, t.source, f));
     const project = newProject({
       name: this.name.trim() || this.songName() || 'Untitled',
       audio: { fileName: song.file.name, hash: song.hash, durationMs: Math.floor((song.buffer.duration * 1000) / f) * f },
@@ -226,7 +222,8 @@ export class StartScreen {
           h('a', { class: 'btn small ghost', href: '../timing/', target: '_blank', rel: 'noopener', title: 'Vocals, drums, notes and lyrics need the full analysis. Download the .xtiming there and drop it here.' }, 'More tracks in Stemlight Timing ↗'))],
       this.busy.timing || (tracks.length ? h('div', { class: 'chips' }, tracks.map((t) => h('span', { class: 'chip', title: t.from }, t.name))) : ''), tracks.length > 0, (fs) => { for (const f of fs) void this.loadTiming(f); });
 
-    const nameInput = h('input', { type: 'text', value: this.name, placeholder: 'Project name', oninput: (e: Event) => { this.name = (e.target as HTMLInputElement).value; } });
+    const nameInput = h('input', { type: 'text', value: this.name, placeholder: song ? this.songName() : 'Named after the song', oninput: (e: Event) => { this.name = (e.target as HTMLInputElement).value; },
+      onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && song) void this.open(); } });
     const go = h('div', { class: 'start-go' },
       h('label', { class: 'field' }, h('span', {}, 'Project name'), nameInput),
       h('label', { class: 'field', style: { flex: '0 0 auto' } }, h('span', {}, 'Sequence timing'),
@@ -235,11 +232,11 @@ export class StartScreen {
       h('button', { class: 'btn primary', disabled: !song, title: song ? '' : 'Drop the song first', onclick: () => void this.open() }, 'Open editor'));
 
     const recent = h('section', { class: 'recent' }, h('h2', {}, 'Recent projects'),
-      this.recent.length ? h('div', { class: 'recent-list' }, this.recent.map((r) => h('div', { class: 'recent-item', role: 'button', tabindex: 0, onclick: (e: Event) => { if (!(e.target as HTMLElement).closest('.del')) this.host.openRecent(r.id); }, onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') this.host.openRecent(r.id); } },
+      this.recent.length ? h('div', { class: 'recent-list' }, this.recent.map((r) => h('div', { class: 'recent-item', role: 'button', tabindex: 0, onclick: (e: Event) => { if (!(e.target as HTMLElement).closest('.del')) this.host.openRecent(r.id); }, onkeydown: (e: KeyboardEvent) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); this.host.openRecent(r.id); } } },
         r.thumb ? h('img', { src: r.thumb, alt: '' }) : h('div', { class: 'thumb' }),
         h('strong', {}, r.name),
         h('span', { class: 'small muted' }, `${formatTime(r.durationMs, false)} · ${r.rows} rows · ${r.effects} effects · ${new Date(r.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`),
-        h('button', { class: 'btn small icon del', title: 'Delete project', onclick: async () => {
+        h('button', { class: 'btn small icon del', title: 'Delete project', 'aria-label': `Delete ${r.name}`, onclick: async () => {
           if (await confirmDialog('Delete project?', `"${r.name}" will be deleted from this browser. This can't be undone.`, 'Delete')) {
             await deleteProject(r.id);
             this.recent = this.recent.filter((x) => x.id !== r.id);

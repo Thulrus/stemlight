@@ -95,7 +95,7 @@ export class EffectBar {
         }, h('kbd', {}, pr.key), glyph(pr.type), h('span', {}, pr.name), rampShape(pr),
           pr.colors ? h('i', { class: 'pal-dot', style: { background: pr.colors[0] } }) : ''))),
       h('div', { class: 'bar-colors' },
-        h('select', { class: 'set-pick', title: 'Color set: the colors effects are picked from', 'aria-label': 'Color set', onchange: (e: Event) => this.host.pickSet((e.target as HTMLSelectElement).value) },
+        h('select', { class: 'set-pick', title: 'Color set: the colors effects are picked from', 'aria-label': 'Color set', onchange: (e: Event) => { const sel = e.target as HTMLSelectElement; this.host.pickSet(sel.value); sel.blur(); } },
           p.colorSets.map((cs) => h('option', { value: cs.id, selected: cs === set }, cs.name))),
         h('div', { class: 'swatch-row', role: 'toolbar', 'aria-label': `${set.name} colors` }, set.colors.map((c) => {
           const on = b.colors.includes(c);

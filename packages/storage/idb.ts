@@ -82,6 +82,28 @@ export function kvStore(db: string, store: string, stores: readonly string[] = [
   };
 }
 
+/**
+ * Write to several stores of one database in a single transaction: all of it is stored or
+ * none of it. One transaction also has the best chance of finishing while a tab closes.
+ * Resolves false when storage refused the write.
+ */
+export async function putAll(db: string, stores: readonly string[], writes: [store: string, key: string, value: unknown][], version = 1): Promise<boolean> {
+  try {
+    const d = await openDb(db, stores, version);
+    await new Promise<void>((resolve, reject) => {
+      const t = d.transaction([...new Set(writes.map((w) => w[0]))], 'readwrite');
+      for (const [store, key, value] of writes) t.objectStore(store).put(value, key);
+      t.oncomplete = () => resolve();
+      t.onabort = t.onerror = () => reject(t.error ?? new Error('IndexedDB transaction failed'));
+      t.commit?.();
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[idb] couldn't store ${writes.map((w) => `${db}/${w[0]}/${w[1]}`).join(', ')}`, err);
+    return false;
+  }
+}
+
 // The timing app's original store.
 const legacy = kvStore('stemlight', 'blobs');
 export const idbGet = <T>(key: string) => legacy.get<T>(key);

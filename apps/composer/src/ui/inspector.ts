@@ -211,6 +211,7 @@ export class Inspector {
           h('li', {}, 'Drag on empty space to box-select (or switch Drag to Draw to draw effects); double-click to fill between marks.'),
           h('li', {}, 'Effects snap to the highlighted timing track. Click a track name to change it; hold Shift to place freely.'),
           h('li', {}, 'Drag a selection to move it, even to other rows; Alt+drag copies. Drag edges to resize.'),
+          h('li', {}, 'Drop more .xtiming files here any time to add timing tracks.'),
           h('li', {}, 'Space plays; arrows nudge to the next mark. Press ? for every key.'))),
       h('div', { class: 'insp-section' }, h('div', { class: 'title' }, 'Song'),
         h('dl', { class: 'kv' },

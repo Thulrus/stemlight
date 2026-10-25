@@ -88,9 +88,19 @@ export function download(name: string, data: string | Uint8Array, type = 'applic
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-export const isTyping = (e: Event) => {
+/**
+ * Whether the focused control needs this key itself: text fields take every key, sliders
+ * their arrow keys, checkboxes Space. Anything else (a slider just dragged, a color just
+ * picked) leaves the shortcuts to the editor.
+ */
+export const ownsKey = (e: KeyboardEvent) => {
   const t = e.target as HTMLElement | null;
-  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+  if (!t) return false;
+  if (t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable) return true;
+  if (!(t instanceof HTMLInputElement)) return false;
+  if (t.type === 'range') return /^(Arrow|Page|Home|End)/.test(e.key);
+  if (t.type === 'checkbox' || t.type === 'radio') return e.key === ' ';
+  return t.type !== 'button' && t.type !== 'color';
 };
 
 export const swatches = (colors: readonly string[]) => h('span', { class: 'swatches' }, colors.map((c) => h('i', { style: { background: c } })));

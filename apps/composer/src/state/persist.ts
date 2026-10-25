@@ -1,4 +1,4 @@
-import { kvStore, requestPersistence, sharedAudio } from '@stemlight/storage/idb';
+import { kvStore, putAll, requestPersistence, sharedAudio } from '@stemlight/storage/idb';
 import type { LayoutSnapshot } from '@stemlight/xlights/layout';
 import type { Project } from '../model/types';
 import type { History } from './store';
@@ -17,9 +17,8 @@ export type RecentEntry = { id: string; name: string; updatedAt: number; duratio
 export type StoredAudio = { name: string; type: string; bytes: ArrayBuffer };
 export type SavedLayout = { fileName: string; savedAt: number; layout: LayoutSnapshot };
 
+/** Save a project, its undo history and its recent-list entry together (one transaction). */
 export async function saveProject(p: Project, history: History, thumb?: string): Promise<boolean> {
-  const ok = await projects.put(p.id, p);
-  await histories.put(p.id, history);
   const entry: RecentEntry = {
     id: p.id,
     name: p.name,
@@ -29,7 +28,7 @@ export async function saveProject(p: Project, history: History, thumb?: string):
     rows: p.rows.length,
     thumb,
   };
-  await meta.put(`recent:${p.id}`, entry);
+  const ok = await putAll('stemlight-composer', STORES, [['projects', p.id, p], ['history', p.id, history], ['meta', `recent:${p.id}`, entry]]);
   void requestPersistence();
   return ok;
 }

@@ -995,7 +995,7 @@ export class Timeline {
     if (!p.sections.length) {
       g.fillStyle = c.faint;
       g.font = '11px system-ui, sans-serif';
-      g.fillText('No sections (import a Sections track, or use Quick beats)', 8, lane.y + lane.h / 2);
+      g.fillText('No sections. Drop a .xtiming with a Sections track here to add them.', 8, lane.y + lane.h / 2);
     }
     g.fillStyle = c.line;
     g.fillRect(0, lane.y + lane.h - 1, this.w, 1);
